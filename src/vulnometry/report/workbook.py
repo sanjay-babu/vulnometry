@@ -338,8 +338,10 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
         ("Schedule", "Queue for the next planned maintenance window."),
         ("Accept", "No action warranted. Record the decision and move on."),
         ("", ""),
-        ("Due dates", "Derived from the verdict and the asset: tier 1 halves the window, regulated systems take 60% "
-                      "of it, production takes 80%. Not a guess, but a policy you can edit in the inventory."),
+        ("Due dates", (f"From the verdict: {summary['sla_policy']} Set in the inventory's 'sla' block."
+                       if summary and summary.get("sla_policy") else
+                       "Derived from the verdict and the asset: tier 1 halves the window, regulated systems take 60% "
+                       "of it, production takes 80%. Set your own windows in the inventory's 'sla' block.")),
         ("Confidence", "high = CVE record, EPSS and asset context all present. low = at least two are missing; "
                        "treat the number as provisional."),
         ("", ""),

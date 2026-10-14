@@ -133,8 +133,18 @@ CVSS score.
 | >= 150 | Schedule | Queue for the next maintenance window |
 | < 150 | Accept | No action warranted; record the decision |
 
-Due dates come from policy rather than the score alone: tier 1 assets halve the window,
-regulated systems get 60% of it, production 80%.
+Due dates come from policy rather than the score alone. The built-in windows are Contain 7,
+Remediate 30 and Schedule 90 days; tier 1 assets halve the window, regulated systems get 60% of
+it, production 80%. If your organisation already has a remediation policy, put it in the
+inventory and it replaces the built-in one, including for findings that match no asset:
+
+```yaml
+sla:
+  days: {Contain: 10, Remediate: 45, Schedule: 100}
+  scale: false   # same window for every asset; leave out to keep the tier/regime/environment scaling
+```
+
+The Method sheet of the workbook states which policy was applied.
 
 Every assessment carries the reasoning that produced it, so you can see which feed contributed
 what. Run `vulnometry measure CVE-2021-44228 --asset checkout-api` for the long form.

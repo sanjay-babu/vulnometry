@@ -227,6 +227,7 @@ async def cmd_import(args) -> int:
         )
 
     summary = portfolio_summary(results)
+    summary["sla_policy"] = inventory.sla.describe()
     if unscored:
         summary["not_scored"] = not_scored_summary(unscored)
     if args.min_index:

@@ -115,7 +115,8 @@ async def assess_finding(
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
     fixes = _fix_versions(bulletins)
-    due_by = asset.due_date(measure.verdict)
+    policy = inventory.sla if inventory else None
+    due_by = asset.due_date(measure.verdict, policy=policy)
 
     return Assessment(
         cve_id=cve_id,
@@ -134,7 +135,7 @@ async def assess_finding(
         internet_exposed=asset.internet_exposed,
         data_classification=asset.data_classification,
         due_by=due_by,
-        sla_days=asset.sla_days(measure.verdict) or None,
+        sla_days=asset.sla_days(measure.verdict, policy) or None,
         scanner=scanner,
         scanner_severity=scanner_severity,
         source_asset=asset_name,

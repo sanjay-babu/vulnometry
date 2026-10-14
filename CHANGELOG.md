@@ -33,6 +33,11 @@ Exposure model `bei-1.1`.
   carries them as `summary.not_scored`. `parse_tabular` and `load_findings` take an optional
   `unscored` list to collect them; callers that pass nothing see no change.
 
+- Due-date windows can be set in the inventory with an `sla` block: `days` per verdict, and
+  `scale: false` to give every asset the same window instead of scaling by tier, regime and
+  environment. Unmatched findings use it too. Without the block nothing changes. The
+  workbook's Method sheet states the policy that was applied.
+
 ### Changed
 
 - `MODEL_VERSION` is `bei-1.1`. Findings without call-graph data score exactly as

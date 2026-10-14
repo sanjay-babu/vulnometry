@@ -28,6 +28,50 @@ TIER_SLA_FACTOR = {1: 0.5, 2: 1.0, 3: 1.75}
 
 
 @dataclass
+class SlaPolicy:
+    """How many days each verdict gets before it is due.
+
+    The built-in windows are scaled by the asset (tier 1 halves them, regulated
+    systems take 60%, production 80%). An organisation that already has a
+    remediation policy sets its own in the inventory instead::
+
+        sla:
+          days: {Contain: 10, Remediate: 45, Schedule: 100}
+          scale: false      # the same window for every tier, regime and environment
+    """
+
+    days: dict[str, int] = field(default_factory=lambda: dict(BASE_SLA))
+    scale: bool = True
+
+    @classmethod
+    def from_dict(cls, raw) -> SlaPolicy:
+        if not raw:
+            return cls()
+        if not isinstance(raw, dict):
+            raise ValueError("'sla' should be a mapping with 'days' and optionally 'scale'")
+        days = dict(BASE_SLA)
+        for verdict, value in (raw.get("days") or {}).items():
+            name = str(verdict).strip().title()
+            if name not in ("Contain", "Remediate", "Schedule"):
+                raise ValueError(f"sla.days: unknown verdict {verdict!r} (Contain, Remediate or Schedule)")
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"sla.days.{name} should be a whole number of days, got {value!r}")
+            days[name] = value
+        return cls(days=days, scale=bool(raw.get("scale", True)))
+
+    @property
+    def is_default(self) -> bool:
+        return self.days == BASE_SLA and self.scale
+
+    def describe(self) -> str:
+        windows = " · ".join(f"{v} {self.days[v]} days" for v in ("Contain", "Remediate", "Schedule"))
+        if self.scale:
+            return (f"{windows}, scaled by the asset: tier 1 halves the window, tier 3 takes 1.75x, "
+                    "regulated systems take 60% of it, production takes 80%.")
+        return f"{windows}, the same for every asset."
+
+
+@dataclass
 class AssetProfile:
     """One place you run something."""
 
@@ -99,10 +143,13 @@ class AssetProfile:
             return False
         return any(fnmatch.fnmatch(text, pattern.lower()) for pattern in self.aliases)
 
-    def sla_days(self, verdict: str) -> int:
-        base = BASE_SLA.get(verdict, 0)
+    def sla_days(self, verdict: str, policy: SlaPolicy | None = None) -> int:
+        policy = policy or SlaPolicy()
+        base = policy.days.get(verdict, 0) if verdict != "Accept" else 0
         if not base:
             return 0
+        if not policy.scale:
+            return base
         days = base * TIER_SLA_FACTOR.get(self.tier or 0, 1.0)
         if self.regulated:
             days *= 0.6
@@ -110,8 +157,8 @@ class AssetProfile:
             days *= 0.8
         return max(1, int(round(days)))
 
-    def due_date(self, verdict: str, from_date: date | None = None) -> str:
-        days = self.sla_days(verdict)
+    def due_date(self, verdict: str, from_date: date | None = None, policy: SlaPolicy | None = None) -> str:
+        days = self.sla_days(verdict, policy)
         if not days:
             return ""
         return ((from_date or date.today()) + timedelta(days=days)).isoformat()
@@ -131,6 +178,7 @@ class Inventory:
     organisation: str = ""
     default_owner: str = ""
     source_path: str = ""
+    sla: SlaPolicy = field(default_factory=SlaPolicy)
 
 
     @classmethod
@@ -157,6 +205,7 @@ class Inventory:
             organisation=data.get("organisation", "") or data.get("organization", ""),
             default_owner=data.get("default_owner", ""),
             source_path=source_path,
+            sla=SlaPolicy.from_dict(data.get("sla")),
         )
 
     @classmethod
