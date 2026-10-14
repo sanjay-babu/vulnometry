@@ -193,8 +193,8 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
     path = build_workbook(_sample(), tmp_path / "out.xlsx",
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
-    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Action Plan", "Accepted",
-                                   "By Owner", "Method"]
+    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Duplicates from scanner",
+                                   "Action Plan", "Accepted", "By Owner", "Method"]
 
     findings = workbook["Findings"]
     assert findings.freeze_panes == "B5"
@@ -394,22 +394,27 @@ def _list_on(sheet, columns):
                         for r in range(header_row + 1, sheet.max_row + 1)]
 
 
-def test_manual_review_lists_every_row_without_a_verdict_of_its_own(tmp_path):
+def test_manual_review_and_duplicates_account_for_every_row(tmp_path):
     from openpyxl import load_workbook
 
     from vulnometry.assessment import not_scored_summary
 
+    url = "https://scanner.example/project/p1"
     items = [
-        Assessment(cve_id="CVE-1", asset="checkout-api", scanner_severity="High", due_by="2026-11-01",
-                   source_row=2, source_rows=3,
-                   duplicate_rows=[{"row": 7, "scanner_severity": "High", "title": "RCE"},
-                                   {"row": 9, "scanner_severity": "Critical", "title": "RCE"}],
+        Assessment(cve_id="CVE-1", asset="checkout-api", scanner="Snyk", scanner_severity="High",
+                   due_by="2026-11-01", source_asset="checkout-svc", source_host="checkout_ci",
+                   source_url=url, issue_url=url + "#issue-A", source_row=2, source_rows=3,
+                   duplicate_rows=[{"row": 7, "scanner_severity": "High", "title": "RCE",
+                                    "issue_url": url + "#issue-B"},
+                                   {"row": 9, "scanner_severity": "Critical", "title": "RCE",
+                                    "issue_url": url + "#issue-C"}],
                    exposure=ExposureMeasure(index=500, verdict="Remediate")),
-        Assessment(cve_id="CVE-2", asset="checkout-api", scanner_severity="Medium", due_by="2027-01-01",
-                   source_row=3, exposure=ExposureMeasure(index=200, verdict="Schedule")),
-        Assessment(cve_id="CVE-3", asset="checkout-api", scanner_severity="Critical", source_row=4,
-                   exposure=ExposureMeasure(index=50, verdict="Accept")),
-        Assessment(cve_id="CVE-4", source_asset="orphan", scanner_severity="Critical", source_row=5,
+        Assessment(cve_id="CVE-2", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
+                   due_by="2027-01-01", source_row=3, exposure=ExposureMeasure(index=200, verdict="Schedule")),
+        Assessment(cve_id="CVE-3", asset="checkout-api", scanner="Snyk", scanner_severity="Critical",
+                   source_row=4, exposure=ExposureMeasure(index=50, verdict="Accept")),
+        Assessment(cve_id="CVE-4", source_asset="orphan", scanner="Snyk", scanner_severity="Critical",
+                   source_url="https://scanner.example/project/p9", source_row=5,
                    exposure=ExposureMeasure(index=60, verdict="Accept")),
     ]
     not_scored = not_scored_summary([{"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license",
@@ -417,24 +422,39 @@ def test_manual_review_lists_every_row_without_a_verdict_of_its_own(tmp_path):
     summary = {"assessed": 4, "actionable": 1, "suppressed_by_context": 0, "unattributed": 1,
                "not_scored": not_scored}
     workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    assert "Duplicates from Snyk" in workbook.sheetnames, "named after the scanner"
 
     review = workbook["Manual review"]
     table = {review.cell(row=r, column=1).value: review.cell(row=r, column=7).value for r in range(5, 13)}
     assert table["Remediate"] == 1 and table["Schedule"] == 1 and table["Accept"] == 1
     assert table["Not analysed (on this list)"] == 1
-    assert table["Duplicate rows (on this list)"] == 2
+    assert table["Duplicate rows (Duplicates from Snyk)"] == 2
     assert table["Not scored (on this list)"] == 1
     assert table["Total"] == 7, "every export row: 4 findings + 2 duplicates + 1 not scored"
 
-    _, listed = _list_on(review, ["Why on this list", "Scanner severity", "Verdict", "CVE", "Export row"])
+    _, listed = _list_on(review, ["Why on this list", "CVE", "Project", "Project URL", "Export row"])
     assert listed == [
-        ["Not analysed", "Critical", "Not analysed", "CVE-4", 5],
-        ["Duplicate row", "Critical", "Remediate", "CVE-1", 9],
-        ["Duplicate row", "High", "Remediate", "CVE-1", 7],
-        ["Not scored (no CVE)", "Low", "Not analysed", None, 6],
-    ]
-    _, reasons = _list_on(review, ["Reason"])
-    assert "as export row 2" in reasons[1][0]
+        ["Not analysed", "CVE-4", "orphan", "https://scanner.example/project/p9", 5],
+        ["Not scored (no CVE)", None, "web", None, 6],
+    ], "duplicates are not on Manual review"
 
-    _, fix = _list_on(workbook["To fix"], ["Verdict", "CVE"])
-    assert fix == [["Remediate", "CVE-1"], ["Schedule", "CVE-2"]], "analysed Accepts and Not analysed stay off"
+    dups = workbook["Duplicates from Snyk"]
+    header = [c.value for c in dups[4]]
+    got = [{header[i]: dups.cell(row=r, column=i + 1).value for i in range(len(header))} for r in (5, 6)]
+    assert [g["Duplicate: export row"] for g in got] == [9, 7], "worst scanner severity first"
+    assert all(g["Kept: export row"] == 2 and g["Kept: issue URL"] == url + "#issue-A" for g in got)
+    assert got[0]["Duplicate: issue URL"] == url + "#issue-C"
+    assert got[0]["Verdict"] == "Remediate" and got[0]["Project"] == "checkout-svc"
+    assert got[0]["Target"] == "checkout_ci"
+    link = dups.cell(row=5, column=header.index("Duplicate: issue URL") + 1).hyperlink
+    assert link is not None and link.target == url + "#issue-C", "URLs are clickable"
+
+    findings = workbook["Findings"]
+    fheader = [c.value for c in findings[4]]
+    for name in ("Project", "Target", "Project URL", "Issue URL"):
+        assert name in fheader, name
+    first = {fheader[i]: findings.cell(row=5, column=i + 1).value for i in range(len(fheader))}
+    assert first["Project URL"] == url and first["Issue URL"] == url + "#issue-A"
+
+    _, fix = _list_on(workbook["To fix"], ["Verdict", "CVE", "Project URL"])
+    assert fix == [["Remediate", "CVE-1", url], ["Schedule", "CVE-2", None]]

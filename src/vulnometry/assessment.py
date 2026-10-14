@@ -176,6 +176,7 @@ async def assess_portfolio(
                 "row": row.get("row", 0), "scanner_severity": str(row.get("raw_severity") or "").strip(),
                 "code_reachability": str(row.get("code_reachability") or "").strip(),
                 "title": row.get("title", ""), "version": row.get("version", ""),
+                "issue_url": row.get("issue_url", ""),
             })
             # Duplicate rows can disagree. Keep the least favourable call-graph
             # verdict: one reachable path is enough, and "not analysed" beats
@@ -213,6 +214,8 @@ async def assess_portfolio(
         result.source_rows = row["_rows"]
         result.source_row = row.get("row", 0)
         result.duplicate_rows = row["_duplicates"]
+        result.source_url = row.get("project_url", "")
+        result.issue_url = row.get("issue_url", "")
     return sorted(results, key=lambda a: a.exposure.index, reverse=True)
 
 
@@ -408,7 +411,8 @@ def not_scored_summary(rows: list[dict]) -> dict:
             {"scanner_severity": scanner_band(r.get("raw_severity", "")), "asset": r.get("asset", ""),
              "host": r.get("host", ""), "component": r.get("component", ""),
              "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier"),
-             "row": r.get("row", 0)}
+             "row": r.get("row", 0), "project_url": r.get("project_url", ""),
+             "issue_url": r.get("issue_url", "")}
             for r in rows
         ],
     }

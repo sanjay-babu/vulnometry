@@ -284,3 +284,19 @@ def test_only_an_explicit_call_graph_verdict_counts():
     assert c("No Path Found") == c("not-reachable") == c("UNREACHABLE") == "unreachable"
     for undecided in ("Not Applicable", "Potentially reachable", "no-info", "", None):
         assert c(undecided) == "", undecided
+
+
+def test_project_and_issue_links_are_read(tmp_path):
+    from openpyxl import Workbook as _Workbook
+
+    workbook = _Workbook()
+    sheet = workbook.active
+    sheet.append(["ISSUE_SEVERITY", "CVE", "PROJECT_NAME", "PROJECT_URL", "ISSUE_URL", "CVE_URL"])
+    sheet.append(["High", "CVE-2024-1234", "svc", "https://x/project/1", "https://x/project/1#issue-9",
+                  "https://www.cve.org/CVERecord?id=CVE-2024-1234"])
+    path = tmp_path / "s.xlsx"
+    workbook.save(path)
+    findings, _ = parse_tabular(path)
+    assert findings[0]["project_url"] == "https://x/project/1"
+    assert findings[0]["issue_url"] == "https://x/project/1#issue-9", "not the CVE link"
+    assert findings[0]["row"] == 2

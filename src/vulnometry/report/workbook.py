@@ -1,7 +1,8 @@
-"""Annotated Excel output: Findings, Manual review, To fix, Action Plan, Accepted, By Owner, Method."""
+"""Annotated Excel output: Findings, Manual review, To fix, Duplicates, Action Plan, Accepted, By Owner, Method."""
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -52,7 +53,8 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 FINDINGS_COLUMNS = [
     ("CVE", 16), ("BEI", 8), ("Verdict", 12), ("Scanner severity", 11), ("Asset", 22),
-    ("Scanner ref", 24), ("Analysis", 15), ("Scanner rows", 9), ("Owner", 26),
+    ("Project", 28), ("Target", 22), ("Project URL", 30), ("Issue URL", 30),
+    ("Analysis", 15), ("Scanner rows", 9), ("Owner", 26),
     ("Business unit", 18), ("Environment", 13), ("Internet", 12), ("Due by", 12), ("SLA days", 9),
     ("Threat", 9), ("Reach", 9), ("Code path", 11), ("Consequence", 12),
     ("CVSS", 7), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 6), ("Ransomware", 11),
@@ -91,7 +93,8 @@ def _primary_driver(item: Assessment) -> str:
 
 
 ACCEPT_COLUMNS = [
-    ("CVE", 16), ("Location", 30), ("Analysis", 15), ("Package", 26), ("Scanner severity", 11),
+    ("CVE", 16), ("Location", 30), ("Project", 28), ("Target", 22), ("Project URL", 30), ("Issue URL", 30),
+    ("Analysis", 15), ("Package", 26), ("Scanner severity", 11),
     ("BEI", 7), ("Threat", 8), ("Reach", 8), ("Code path", 10), ("Conseq.", 9),
     ("Internet", 11), ("Tier", 6), ("Data class", 14),
     ("EPSS %", 9), ("EPSS date", 12), ("CISA KEV", 9), ("CVSS", 7),
@@ -101,6 +104,18 @@ ACCEPT_COLUMNS = [
     ("Decision", 26), ("Decided by", 16), ("Decision date", 14),
     ("Review by", 14), ("Reopen triggers", 60), ("Snyk ignore ID", 18), ("Ticket", 16),
 ]
+
+_ACCEPT_WRAP = {i for i, (name, _) in enumerate(ACCEPT_COLUMNS, start=1)
+                if name in ("Rationale", "Evidence gaps", "Reopen triggers")}
+_URL_COLUMNS = {"Project URL", "Issue URL", "Duplicate: issue URL", "Kept: issue URL"}
+
+
+def _link(cell, value, column_name: str) -> None:
+    """Make a URL column clickable."""
+    if column_name in _URL_COLUMNS and isinstance(value, str) and value.startswith(("http://", "https://")):
+        cell.hyperlink = value
+        cell.font = Font(color="1F5FAD", underline="single")
+
 
 REOPEN_DEFAULT = ("EPSS >= 0.10  |  added to CISA KEV  |  a working public exploit appears  |  "
                   "the asset's internet exposure or tier changes  |  review-by date reached")
@@ -132,6 +147,10 @@ def _accepted_sheet(workbook: Workbook, items: list[Assessment]) -> None:
         values = [
             item.cve_id,
             item.where() or "",
+            item.source_asset or "",
+            item.source_host or "",
+            item.source_url or "",
+            item.issue_url or "",
             "Analysed" if item.analysed() else "Not analysed",
             item.source_component or "",
             scanner_band(item.scanner_severity),
@@ -161,7 +180,8 @@ def _accepted_sheet(workbook: Workbook, items: list[Assessment]) -> None:
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=column in (20, 21, 28))
+            cell.alignment = Alignment(vertical="top", wrap_text=column in _ACCEPT_WRAP)
+            _link(cell, value, ACCEPT_COLUMNS[column - 1][0])
         sheet.cell(row=row, column=1).font = Font(bold=True)
 
     _widths(sheet, ACCEPT_COLUMNS)
@@ -192,7 +212,10 @@ def _findings_sheet(workbook: Workbook, items: list[Assessment]) -> None:
             _verdict_label(item),
             scanner_band(item.scanner_severity),
             item.asset or "",
-            item.scanner_ref(),
+            item.source_asset or "",
+            item.source_host or "",
+            item.source_url or "",
+            item.issue_url or "",
             "Analysed" if item.analysed() else NOT_ANALYSED,
             item.source_rows or 1,
             item.owner or "",
@@ -220,6 +243,7 @@ def _findings_sheet(workbook: Workbook, items: list[Assessment]) -> None:
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top", wrap_text=column >= _RATIONALE_COLUMN)
+            _link(cell, value, FINDINGS_COLUMNS[column - 1][0])
 
         verdict_cell = sheet.cell(row=row, column=3)
         _paint_verdict(verdict_cell, item)
@@ -267,7 +291,8 @@ def _action_sheet(workbook: Workbook, items: list[Assessment]) -> None:
 
 REVIEW_COLUMNS = [
     ("Why on this list", 24), ("Scanner severity", 11), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
-    ("CVE", 16), ("Asset", 24), ("Scanner ref", 30), ("Owner", 26), ("Export row", 9),
+    ("CVE", 16), ("Asset", 24), ("Project", 28), ("Target", 22), ("Project URL", 30), ("Issue URL", 30),
+    ("Owner", 26), ("Export row", 9),
     ("Title / component", 30), ("Reason", 90), ("Next step", 60),
 ]
 _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
@@ -286,7 +311,9 @@ def _severity_key(value: str) -> int:
     return _SEVERITY_ORDER.get(scanner_band(value), 4)
 
 
-def _list_rows(sheet, header_row: int, columns, rows: list[list], wrap_from: int) -> None:
+def _list_rows(sheet, header_row: int, columns, rows: list[list], verdict_column: int = 3) -> None:
+    names = [name for name, _ in columns]
+    wrap_from = next((i for i, n in enumerate(names, start=1) if n in ("Reason", "Directive")), len(names) + 1)
     for index, (name, _) in enumerate(columns, start=1):
         sheet.cell(row=header_row, column=index, value=name)
     _style_header(sheet, header_row, len(columns))
@@ -296,9 +323,11 @@ def _list_rows(sheet, header_row: int, columns, rows: list[list], wrap_from: int
             cell = sheet.cell(row=r, column=column, value=value)
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top", wrap_text=column >= wrap_from)
-        verdict = sheet.cell(row=r, column=3)
-        if values[2] in VERDICT_FILL:
-            verdict.fill, verdict.font = VERDICT_FILL[values[2]], VERDICT_FONT[values[2]]
+            _link(cell, value, names[column - 1])
+        verdict = sheet.cell(row=r, column=verdict_column)
+        label = values[verdict_column - 1]
+        if label in VERDICT_FILL:
+            verdict.fill, verdict.font = VERDICT_FILL[label], VERDICT_FONT[label]
         else:
             verdict.fill, verdict.font = NOT_ANALYSED_FILL, NOT_ANALYSED_FONT
     _widths(sheet, columns)
@@ -346,9 +375,9 @@ def _manual_review_sheet(workbook: Workbook, items: list[Assessment], not_scored
     sheet.cell(row=1, column=1, value="Manual review: rows with no verdict of their own").font = TITLE_FONT
     sheet.cell(
         row=2, column=1,
-        value=(f"{len(unanalysed)} not analysed, {len(duplicates)} duplicate rows, {len(unscored)} not scored. "
-               "The table counts every row of the scanner export by scanner severity, so it reconciles to "
-               "the export. Filter 'Why on this list' and hand the rows over."),
+        value=(f"{len(unanalysed)} not analysed, {len(unscored)} not scored. The table counts every row of the "
+               "scanner export by scanner severity, so it reconciles to the export; duplicate rows are on "
+               f"'{_duplicates_title(items)}'. Filter 'Why on this list' and hand the rows over."),
     ).font = Font(color="7F8C8D", size=10)
 
     analysed = [i for i in items if i.analysed()]
@@ -356,7 +385,7 @@ def _manual_review_sheet(workbook: Workbook, items: list[Assessment], not_scored
               for v in ("Contain", "Remediate", "Schedule", "Accept")]
     groups += [
         ("Not analysed (on this list)", [_band(i.scanner_severity) for i in unanalysed]),
-        ("Duplicate rows (on this list)", [_band(d.get("scanner_severity", "")) for _, d in duplicates]),
+        (f"Duplicate rows ({_duplicates_title(items)})", [_band(d.get("scanner_severity", "")) for _, d in duplicates]),
         ("Not scored (on this list)", [_band(r.get("scanner_severity", "")) for r in unscored]),
     ]
     header_row = _count_table(sheet, 4, groups) + 1
@@ -364,27 +393,19 @@ def _manual_review_sheet(workbook: Workbook, items: list[Assessment], not_scored
     rows: list[list] = []
     for item in sorted(unanalysed, key=lambda i: (_severity_key(i.scanner_severity), -i.exposure.index)):
         rows.append([REVIEW_NOT_ANALYSED, scanner_band(item.scanner_severity), NOT_ANALYSED,
-                     item.exposure.index, "", item.cve_id, "", item.scanner_ref(), item.owner or "",
+                     item.exposure.index, "", item.cve_id, "", item.source_asset or "", item.source_host or "",
+                     item.source_url or "", item.issue_url or "", item.owner or "",
                      item.source_row or "", item.source_component or "", item.rationale(),
                      "Map this project to an asset in the inventory and re-run for a real verdict. "
                      "Until then, triage it on the scanner's severity."])
-    for item, dup in sorted(duplicates, key=lambda p: (_severity_key(p[1].get("scanner_severity", "")),
-                                                      p[0].cve_id, p[1].get("row", 0))):
-        label = _verdict_label(item)
-        rows.append([REVIEW_DUPLICATE, scanner_band(dup.get("scanner_severity", "")), label,
-                     item.exposure.index, item.due_by or "", item.cve_id, item.asset, item.scanner_ref(),
-                     item.owner or "", dup.get("row") or "", dup.get("title", ""),
-                     (f"Same CVE on the same project as export row {item.source_row or '?'}, so it was merged "
-                      f"into that finding and judged once: {label}."),
-                     "Confirm it is the same issue (often another dependency path to the same package). "
-                     "If it is a different package or deployment, it needs its own decision."])
     for row in sorted(unscored, key=lambda r: _severity_key(r.get("scanner_severity", ""))):
         rows.append([REVIEW_NOT_SCORED, row.get("scanner_severity", ""), NOT_ANALYSED, "", "", "",
-                     "", row.get("asset", "") or row.get("host", ""), "", row.get("row") or "",
+                     "", row.get("asset", ""), row.get("host", ""), row.get("project_url", ""),
+                     row.get("issue_url", ""), "", row.get("row") or "",
                      row.get("title", ""),
                      "No CVE identifier: exposure is scored per CVE, so only the scanner's severity applies.",
                      "Triage on the scanner's severity."])
-    _list_rows(sheet, header_row, REVIEW_COLUMNS, rows, wrap_from=12)
+    _list_rows(sheet, header_row, REVIEW_COLUMNS, rows)
 
 
 def _to_fix_sheet(workbook: Workbook, items: list[Assessment]) -> None:
@@ -398,11 +419,51 @@ def _to_fix_sheet(workbook: Workbook, items: list[Assessment]) -> None:
     header_row = _count_table(sheet, 4, [(v, [_band(i.scanner_severity) for i in fix if i.exposure.verdict == v])
                                          for v in ("Contain", "Remediate", "Schedule")]) + 1
     rows = [["Fix", scanner_band(i.scanner_severity), i.exposure.verdict, i.exposure.index, i.due_by or "",
-             i.cve_id, i.asset, i.scanner_ref(), i.owner or "", i.source_row or "",
+             i.cve_id, i.asset, i.source_asset or "", i.source_host or "", i.source_url or "",
+             i.issue_url or "", i.owner or "", i.source_row or "",
              i.source_component or "", i.rationale(), i.directive]
             for i in sorted(fix, key=lambda i: (i.due_by or "9999-12-31", -i.exposure.index))]
     columns = [("Why on this list", 10), *REVIEW_COLUMNS[1:-1], ("Directive", 60)]
-    _list_rows(sheet, header_row, columns, rows, wrap_from=12)
+    _list_rows(sheet, header_row, columns, rows)
+
+
+DUPLICATE_COLUMNS = [
+    ("Scanner severity", 11), ("CVE", 16), ("Title", 30), ("Project", 28), ("Target", 22),
+    ("Duplicate: export row", 10), ("Duplicate: issue URL", 34), ("Kept: export row", 10),
+    ("Kept: issue URL", 34), ("Verdict", 13), ("BEI", 8), ("Due by", 12), ("Asset", 24), ("Owner", 26),
+    ("Project URL", 34),
+]
+
+
+def _duplicates_title(items: list[Assessment]) -> str:
+    names = Counter(i.scanner for i in items if i.scanner)
+    return f"Duplicates from {names.most_common(1)[0][0] if names else 'scanner'}"[:31]
+
+
+def _duplicates_sheet(workbook: Workbook, items: list[Assessment]) -> None:
+    """Rows the scanner listed more than once for the same CVE on the same project and target.
+
+    Each sits beside the row it was merged into. Typically the scanner carries two advisories
+    for one vulnerability in one package, so the issue links differ and nothing else does.
+    """
+    pairs = [(i, d) for i in items for d in i.duplicate_rows]
+    sheet = workbook.create_sheet(_duplicates_title(items), 3)
+    sheet.cell(row=1, column=1, value="Duplicate rows: the same CVE listed again on the same project").font = TITLE_FONT
+    sheet.cell(
+        row=2, column=1,
+        value=(f"{len(pairs)} row(s) repeat a CVE already listed for the same project and target, usually a second "
+               "advisory for the same vulnerability in the same package. Each was merged into the kept row's "
+               "finding and judged once; its verdict is shown. Compare the two issue links to confirm."),
+    ).font = Font(color="7F8C8D", size=10)
+    rows = []
+    for item, dup in sorted(pairs, key=lambda p: (_severity_key(p[1].get("scanner_severity", "")),
+                                                  p[0].cve_id, p[0].source_asset, p[1].get("row", 0))):
+        rows.append([scanner_band(dup.get("scanner_severity", "")), item.cve_id, dup.get("title", ""),
+                     item.source_asset or "", item.source_host or "", dup.get("row") or "",
+                     dup.get("issue_url", ""), item.source_row or "", item.issue_url or "",
+                     _verdict_label(item), item.exposure.index, item.due_by or "", item.asset or "",
+                     item.owner or "", item.source_url or ""])
+    _list_rows(sheet, 4, DUPLICATE_COLUMNS, rows, verdict_column=10)
 
 
 def _owner_sheet(workbook: Workbook, items: list[Assessment]) -> None:
@@ -509,7 +570,7 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
                                  "listing several CVEs counts once per CVE)"),
                 ("  Merged duplicates",
                  f"{intake['merged_duplicates']}  (the same CVE on the same project and host, listed more "
-                 "than once by the scanner, e.g. once per dependency path. Each is listed on Manual review; "
+                 "than once by the scanner, e.g. once per advisory. Each is listed on the Duplicates sheet; "
                  "'Scanner rows' on Findings says how many each finding stands for)"),
                 ("  Findings", intake["findings"]),
             ]
@@ -560,6 +621,7 @@ def build_workbook(items: list[Assessment], path: str | Path, summary: dict | No
     _accepted_sheet(workbook, items)
     _manual_review_sheet(workbook, items, (summary or {}).get("not_scored"))
     _to_fix_sheet(workbook, items)
+    _duplicates_sheet(workbook, items)
     _owner_sheet(workbook, items)
     _method_sheet(workbook, items, summary)
     path.parent.mkdir(parents=True, exist_ok=True)

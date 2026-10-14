@@ -268,8 +268,8 @@ poetry.lock, package-lock.json, go.mod, Gemfile.lock, Cargo.lock, pom.xml, Cyclo
 
 The workbook it writes has these sheets: Findings (every finding, colour-coded, filterable,
 frozen header, with a plain-language Rationale column), Manual review (every export row with no
-verdict of its own: not analysed, duplicate rows, no CVE), To fix (Contain, Remediate and
-Schedule by due date), Action Plan (Contain and Remediate, sorted by due date), Accepted
+verdict of its own: not analysed, no CVE), To fix (Contain, Remediate and Schedule by due
+date), Duplicates (rows merged into another row's finding, side by side), Action Plan (Contain and Remediate, sorted by due date), Accepted
 (analysed findings below the action threshold, with the rationale, the EPSS score and its date,
 internet exposure, evidence gaps, model version and timestamp, plus blank columns for who
 accepted it, the review-by date and what should reopen it), By Owner (workload per team), and
@@ -285,7 +285,9 @@ so the report still accounts for every row in the export.
 The Manual review sheet lists every row of the export that has no verdict of its own, one row
 each: findings that could not be analysed, duplicate rows merged into another finding, and rows
 with no CVE. Its count table reconciles to the export's row count. The To fix sheet lists what
-needs fixing, by due date.
+needs fixing, by due date. Rows the scanner listed twice for the same CVE on the same project
+are on a Duplicates sheet beside the row they were merged into. Every list carries the
+scanner's project, target, project link and issue link.
 
 When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
 verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result. The

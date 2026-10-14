@@ -50,6 +50,12 @@ Exposure model `bei-1.1`.
   and scanner severity, so it reconciles to the export. It replaces the separate Not scored
   sheet. A To fix sheet lists the analysed Contain, Remediate and Schedule findings by due date.
   Findings record `source_row` and `duplicate_rows`.
+- Duplicate rows moved from Manual review to their own sheet, named after the scanner
+  ("Duplicates from Snyk"): each sits beside the row it was merged into, with both issue links,
+  so the one difference (usually a second advisory for the same vulnerability) is visible.
+- Findings, Manual review, To fix, Accepted and Duplicates show the scanner's Project, Target,
+  Project URL and Issue URL (read from columns such as `PROJECT_URL` and `ISSUE_URL`); links are
+  clickable. Findings carry `source_url` and `issue_url`.
 - Every row of a spreadsheet export is accounted for. Findings has a Scanner rows column (how
   many export rows a finding stands for, after duplicates of the same CVE on the same project
   are merged), and the Method sheet reconciles rows in the export to findings

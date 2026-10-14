@@ -45,6 +45,9 @@ COLUMN_ALIASES = {
     # Only used to describe rows that carry no CVE, so they can be listed rather than dropped.
     "title": ["problemtitle", "title", "issuetitle", "vulnerabilitytitle", "vulnerabilityname",
               "pluginname", "summary"],
+    # Links back into the scanner, so a reader can open the project or the issue.
+    "project_url": ["projecturl", "repositoryurl", "repourl", "targeturl", "asseturl"],
+    "issue_url": ["issueurl", "findingurl", "vulnerabilityurl", "alerturl"],
 }
 
 _MAX_SCAN_ROWS = 25
@@ -271,6 +274,8 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "source": path.name,
             "row": sheet_row,
             "title": _cell(row, mapping.get("title")),
+            "project_url": _cell(row, mapping.get("project_url")),
+            "issue_url": _cell(row, mapping.get("issue_url")),
         }
         if not cve_ids:
             if unscored is not None:
