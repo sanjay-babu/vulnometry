@@ -108,6 +108,7 @@ FIELDS = {
     "Ransomware": lambda r: _item(r, lambda i: "Yes" if i.exploitation.ransomware_linked else ""),
     "Component": lambda r: _item(r, lambda i: i.source_component),
     "Fixed in": lambda r: _item(r, lambda i: ", ".join(i.fixes[:3])),
+    "Scanner fixability": lambda r: _item(r, lambda i: i.scanner_fixability),
     "Confidence": lambda r: _item(r, lambda i: i.exposure.confidence),
     "Evidence gaps": lambda r: _item(r, lambda i: " | ".join(i.gaps) or "none"),
     "Model": lambda r: _item(r, lambda i: i.exposure.model_version),
@@ -134,15 +135,16 @@ FINDINGS_COLUMNS = [
     *IDENTITY, ("Internet", 10), ("Analysis", 13), ("Not analysed because", 18), ("Duplicate of row", 9),
     *LINKS, ("SLA days", 9), ("Threat", 9), ("Reach", 9), ("Code path", 11), ("Consequence", 12),
     ("CVSS", 7), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 6), ("Ransomware", 11), ("Component", 22),
-    ("Fixed in", 28), ("Confidence", 11), ("Business unit", 18), ("Environment", 13),
+    ("Fixed in", 28), ("Scanner fixability", 14), ("Confidence", 11), ("Business unit", 18),
+    ("Environment", 13),
     ("Rationale", 90), ("Directive", 60),
 ]
 REVIEW_COLUMNS = [*IDENTITY, ("Not analysed because", 18), *LINKS, ("Reason", 90), ("Directive", 60)]
-FIX_COLUMNS = [*IDENTITY, *LINKS, ("Reason", 90), ("Directive", 60)]
+FIX_COLUMNS = [*IDENTITY, ("Scanner fixability", 14), *LINKS, ("Reason", 90), ("Directive", 60)]
 ACCEPT_COLUMNS = [
     *IDENTITY, *LINKS, ("Threat", 8), ("Reach", 8), ("Code path", 10), ("Consequence", 9), ("Internet", 11),
     ("Tier", 6), ("Data class", 14), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 9), ("CVSS", 7),
-    ("Fixed in", 22), ("Confidence", 11), ("Rationale", 95), ("Evidence gaps", 40), ("Model", 10),
+    ("Fixed in", 22), ("Scanner fixability", 14), ("Confidence", 11), ("Rationale", 95), ("Evidence gaps", 40), ("Model", 10),
     ("Assessed (UTC)", 22), ("Decision", 26), ("Decided by", 16), ("Decision date", 14), ("Review by", 14),
     ("Reopen triggers", 60), ("Ticket", 16),
 ]
