@@ -230,6 +230,7 @@ async def cmd_import(args) -> int:
 
     summary = portfolio_summary(results)
     summary["sla_policy"] = inventory.sla.describe()
+    summary["review_days"] = inventory.sla.review_days
     if unscored:
         summary["not_scored"] = not_scored_summary(unscored)
     records = export_rows(results, (summary.get("not_scored") or {}).get("rows"))

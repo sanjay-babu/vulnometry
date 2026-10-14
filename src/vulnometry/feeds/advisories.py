@@ -180,18 +180,19 @@ async def ghsa_for_cve(cve_id: str) -> list[Bulletin]:
 
 
 async def exploit_artifacts(cve_id: str, limit: int = 6) -> list[ExploitArtifact]:
-    """Public exploit material on GitHub. Heuristic by nature."""
+    """Public exploit material on GitHub. Heuristic by nature.
+
+    A failed search raises, so the caller records it as an evidence gap: returning nothing would
+    read as "no exploit found", a false negative.
+    """
     cve_id = canonical_cve(cve_id)
-    try:
-        payload = await client().get_json(
-            GH_SEARCH,
-            source="github-search",
-            params={"q": f"{cve_id} in:name,description,readme", "sort": "stars", "per_page": 20},
-            headers=_gh_headers(),
-            ttl=24 * 3600,
-        )
-    except FeedError:
-        return []
+    payload = await client().get_json(
+        GH_SEARCH,
+        source="github-search",
+        params={"q": f"{cve_id} in:name,description,readme", "sort": "stars", "per_page": 20},
+        headers=_gh_headers(),
+        ttl=24 * 3600,
+    )
 
     artifacts: list[ExploitArtifact] = []
     for repo in (payload or {}).get("items", []) or []:

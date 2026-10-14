@@ -50,14 +50,33 @@ def _dedupe(bulletins):
     return unique
 
 
-def _fix_versions(bulletins) -> list[str]:
+_SNYK_ID = re.compile(r"^SNYK-[A-Z0-9]+-([A-Z0-9]+)-\d+$")
+
+
+def _package_token(issue_id: str) -> str:
+    """The package a scanner issue is about, when its identifier names it (SNYK-JS-AXIOS-123 -> AXIOS)."""
+    match = _SNYK_ID.match((issue_id or "").strip().upper())
+    return match.group(1) if match else ""
+
+
+def _same_package(component: str, token: str) -> bool:
+    name = re.sub(r"[^A-Z0-9]", "", (component or "").upper())
+    return bool(name) and (name == token or name.startswith(token))
+
+
+def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
+    """Fixed versions from the advisories. When the scanner's issue names a package, only that
+    package's fixes: one CVE can span several packages, and a row is about one of them."""
+    token = _package_token(issue_id)
+    remedies = [r for b in bulletins for r in b.remedies if r.fixed_in]
+    if token:
+        mine = [r for r in remedies if _same_package(r.component, token)]
+        remedies = mine or remedies
     fixes: list[str] = []
-    for bulletin in bulletins:
-        for remedy in bulletin.remedies:
-            if remedy.fixed_in:
-                label = f"{remedy.component} {remedy.fixed_in}" if remedy.component else remedy.fixed_in
-                if label not in fixes:
-                    fixes.append(label)
+    for remedy in remedies:
+        label = f"{remedy.component} {remedy.fixed_in}" if remedy.component else remedy.fixed_in
+        if label not in fixes:
+            fixes.append(label)
     return fixes
 
 
@@ -73,6 +92,7 @@ async def assess_finding(
     scanner: str = "",
     code_reachability: str = "",
     scanner_fixability: str = "",
+    issue_id: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -115,7 +135,7 @@ async def assess_finding(
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
-    fixes = _fix_versions(bulletins)
+    fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
     due_by = asset.due_date(measure.verdict, policy=policy)
 
@@ -214,6 +234,7 @@ async def assess_portfolio(
                 scanner=str(row.get("scanner") or "").strip(),
                 code_reachability=row["code_reachability"],
                 scanner_fixability=str(row.get("fixability") or "").strip(),
+                issue_id=row.get("issue_id", "") or issue_id_from(row.get("issue_url", "")),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))
@@ -225,6 +246,8 @@ async def assess_portfolio(
         result.issue_url = row.get("issue_url", "")
         result.issue_id = row.get("issue_id", "") or issue_id_from(result.issue_url)
         result.source_title = row.get("title", "")
+        result.issue_type = row.get("issue_type", "")
+        result.scanner_exploit_maturity = row.get("exploit_maturity", "")
     return sorted(results, key=lambda a: a.exposure.index, reverse=True)
 
 
@@ -422,7 +445,8 @@ def not_scored_summary(rows: list[dict]) -> dict:
              "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier"),
              "row": r.get("row", 0), "project_url": r.get("project_url", ""),
              "issue_url": r.get("issue_url", ""),
-             "issue_id": r.get("issue_id", "") or issue_id_from(r.get("issue_url", ""))}
+             "issue_id": r.get("issue_id", "") or issue_id_from(r.get("issue_url", "")),
+             "issue_type": r.get("issue_type", "")}
             for r in rows
         ],
     }
@@ -458,14 +482,18 @@ def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | Non
         lead = max(group, key=lambda a: a.exposure.index)
         records.append(_record(row, lead, sorted({a.cve_id for a in group})))
     for r in not_scored_rows or []:
+        licence = (r.get("issue_type") or "").strip().lower().startswith("licen")
         records.append({
             "row": r.get("row", 0), "item": None, "cves": [], "scanner_severity": r.get("scanner_severity", ""),
             "title": r.get("title", ""), "project": r.get("asset", ""), "target": r.get("host", ""),
             "project_url": r.get("project_url", ""), "issue_url": r.get("issue_url", ""),
-            "issue_id": r.get("issue_id", ""), "analysed": False, "verdict": NOT_ANALYSED,
-            "judgment": NOT_ANALYSED, "why_not": "No CVE identifier",
-            "reason": "Not analysed: no CVE identifier (a licence issue or a scanner-only advisory). Exposure is "
-                      "scored per CVE, so only the scanner's severity applies.",
+            "issue_id": r.get("issue_id", ""), "issue_type": r.get("issue_type", ""),
+            "analysed": False, "verdict": NOT_ANALYSED, "judgment": NOT_ANALYSED,
+            "why_not": "Licence issue" if licence else "No CVE identifier",
+            "reason": ("Not analysed: a licence issue, not a vulnerability, so exposure scoring does not apply. "
+                       "Review it against the licence policy." if licence else
+                       "Not analysed: no CVE identifier (a scanner-only advisory). Exposure is scored per CVE, "
+                       "so only the scanner's severity applies."),
             "duplicate_of": None,
         })
     first_seen: dict[str, int] = {}
@@ -481,16 +509,43 @@ def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | Non
 
 def _record(row: int, item: Assessment, cves: list[str]) -> dict:
     analysed = item.analysed()
+    reason = item.rationale()
+    why_not = "" if analysed else "No inventory match"
+    # Accepting a risk needs the evidence to be there. Without a CVE record, an EPSS score or the
+    # asset's context (confidence below high) the low score may only reflect missing data.
+    if analysed and item.exposure.verdict == "Accept" and (item.exposure.confidence != "high" or item.gaps):
+        analysed = False
+        why_not = "Insufficient data"
+        gaps = "; ".join(item.gaps) or "the CVE record, EPSS score or asset context is incomplete"
+        reason = (f"Not analysed: not enough data to accept this risk ({gaps}; confidence "
+                  f"{item.exposure.confidence}). Check the CVE before accepting it. Provisional result: {reason}")
     return {
         "row": row, "item": item, "cves": cves, "scanner_severity": scanner_band(item.scanner_severity),
         "title": item.source_title, "project": item.source_asset, "target": item.source_host,
         "project_url": item.source_url, "issue_url": item.issue_url, "issue_id": item.issue_id,
-        "analysed": analysed,
+        "issue_type": item.issue_type, "analysed": analysed,
         "verdict": item.exposure.verdict if analysed else NOT_ANALYSED,
         "judgment": JUDGMENT.get(item.exposure.verdict, item.exposure.verdict) if analysed else NOT_ANALYSED,
-        "why_not": "" if analysed else "No inventory match",
-        "reason": item.rationale(), "duplicate_of": None,
+        "why_not": why_not, "reason": reason, "duplicate_of": None,
     }
+
+
+def suppression(rec: dict) -> tuple[bool, str]:
+    """Can an accepted row be suppressed in the scanner, or should it stay open while accepted?
+
+    Suppressing hides a finding from everyone who works from the scanner, so it is held back
+    whenever the scanner's own evidence argues against it.
+    """
+    item = rec.get("item")
+    if rec.get("judgment") != "Accept" or item is None:
+        return False, "not accepted"
+    if item.exploitation.confirmed:
+        return False, "keep open: exploited in the wild (CISA KEV)"
+    if item.code_reachability == "reachable":
+        return False, "keep open: the scanner found a call path to the vulnerable function"
+    if (item.scanner_exploit_maturity or "").strip().lower() == "mature":
+        return False, "keep open: the scanner reports a mature exploit"
+    return True, "suppress"
 
 
 def _count_verdicts(items) -> dict:

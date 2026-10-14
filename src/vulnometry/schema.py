@@ -250,6 +250,8 @@ class Assessment(Serialisable):
     issue_id: str = ""  # the scanner's identifier for this issue
     source_title: str = ""  # the scanner's title for this issue
     scanner_fixability: str = ""  # the scanner's own view of whether a fix exists
+    issue_type: str = ""  # the scanner's classification: Vulnerability, License, ...
+    scanner_exploit_maturity: str = ""  # the scanner's view: Mature, Proof of Concept, No Known Exploit
     fixes_checked: bool = True  # False when fixed versions were not looked up (signal lens)
 
     directive: str = ""
@@ -306,14 +308,25 @@ class Assessment(Serialisable):
         name, _, basis = (max if urgent else min)(factors, key=lambda f: f[1])
         lead = {
             ("threat", True): "exploitation is likely or under way",
-            ("threat", False): "little sign anyone will try",
+            ("threat", False): "exploitation unlikely in the next 30 days",
             ("reachability", True): "readily reachable in this environment",
             ("reachability", False): "hard to reach in this environment",
             ("consequence", True): "high impact if exploited",
             ("consequence", False): "limited impact if exploited",
         }[(name, urgent)]
 
-        parts = [f"{e.verdict}: {lead} — {(basis or ['no detail recorded'])[0]}."]
+        if urgent:
+            parts = [f"{e.verdict}: {lead} — {(basis or ['no detail recorded'])[0]}."]
+        else:
+            # Cite what actually lowered the score, not whatever was recorded first: 'Attack vector
+            # is network' is a reason something is reachable, so it can't explain 'hard to reach'.
+            if name == "threat" and basis and basis[0].startswith("No EPSS"):
+                lead = "no exploitation data yet"
+            reasons = _reducing(name, basis) or (basis or ["no detail recorded"])[:1]
+            parts = [f"{e.verdict}: {lead} — {'; '.join(_sentence(r) for r in reasons)}."]
+            also = [r for other, _, b in factors if other != name for r in _reducing(other, b)[:1]]
+            if also:
+                parts.append("Also: " + "; ".join(_sentence(r) for r in also) + ".")
 
         ctx = [self.exposure_facing()]
         if self.tier:
@@ -328,6 +341,10 @@ class Assessment(Serialisable):
         else:
             ctx.append("no EPSS score")
         ctx.append("in CISA KEV" if self.exploitation.confirmed else "not in CISA KEV")
+        if self.scanner_exploit_maturity:
+            ctx.append(f"scanner exploit maturity: {self.scanner_exploit_maturity}")
+        elif self.artifacts:
+            ctx.append("public exploit material referenced")
         if self.code_reachability:
             ctx.append(
                 "call path to the vulnerable function"
@@ -351,3 +368,35 @@ class Assessment(Serialisable):
         if self.exploitation.confirmed:
             bits.append("KEV")
         return " · ".join(bits)
+
+
+# Evidence lines that lower a factor, strongest first. Lines that raise it (a network attack
+# vector, internet exposure, a call path) are never offered as the reason something scored low.
+_REDUCING = {
+    "reachability": (
+        "found no call path", "does not run the affected component", "is not internet-reachable",
+        "Compensating controls in place", "Attack vector is local", "Attack vector is adjacent",
+        "Attack vector is physical", "Requires privileged access", "High attack complexity",
+        "Requires some level", "Needs a user", "Internet exposure unknown",
+    ),
+    "threat": ("EPSS puts exploitation",),
+    "consequence": ("CVSS impact", "base score", "supporting", "Holds internal data", "Holds public data"),
+}
+
+
+def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
+    markers = _REDUCING.get(factor, ())
+    found = []
+    for marker in markers:
+        for line in basis:
+            if marker in line and line not in found:
+                found.append(line)
+    if factor == "threat":
+        # An EPSS line is a reason for low threat only when it is low; public exploit material never is.
+        found = [line for line in found if not any(w in line for w in ("Public exploit",))]
+    return found[:limit]
+
+
+def _sentence(line: str) -> str:
+    return line[0].lower() + line[1:] if line[:2] != "CV" and line[:4] != "EPSS" and line[:1].isupper() \
+        and not line.split()[0].isupper() else line

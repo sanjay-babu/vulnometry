@@ -62,7 +62,48 @@ Exposure model `bei-1.1`.
   supported fix) is read, shown in a Scanner fixability column, and used in the rationale and
   directive when no fixed version was looked up.
 
+- An **Issue type** column (the scanner's Vulnerability / License classification) on every list, so
+  rows can be filtered as in the scanner. Licence rows say so: "a licence issue, not a
+  vulnerability, so exposure scoring does not apply".
+- A **Scanner exploit maturity** column (e.g. Snyk `EXPLOIT_MATURITY`), also stated in the
+  rationale's context, so a known exploit is never left unsaid next to an Accept.
+- An Accept with confidence below high (CVE record, EPSS score or asset context missing) is
+  judged **Not analysed (insufficient data)** instead, with the gaps named: the low score may
+  only reflect missing data. It is kept off the Accepted sheet.
+
+- **Engineering - fix** sheet (replaces To fix): every row that is not an accepted risk. Rows to
+  fix (Contain, Remediate, Schedule) by due date with the fixed version to move to, then the rows
+  that could not be judged, by scanner severity.
+- **DevSecOps - suppress** sheet: the accepted rows that are safe to suppress in the scanner, each
+  with its issue link, an ignore reason and a "Suppress until" date. An accepted row stays open
+  in the scanner, and says why on the Accepted sheet, when the CVE is in CISA KEV, the scanner
+  found a call path, or the scanner reports a mature exploit. `suppression()` holds the rule.
+- `sla.review_days` in the inventory (default 90): how long an accepted risk stands before it is
+  re-reviewed, and so when a suppression expires.
+- Fixed versions follow the package the scanner issue names (Snyk `SNYK-JAVA-<PACKAGE>-n`): one
+  CVE can span several packages, and a row is about one of them.
+- An Accept with any evidence gap (a feed that failed) is judged Not analysed (insufficient
+  data), as one with confidence below high already is.
+
 ### Fixed
+
+- GitHub's search API allows 30 requests a minute; searches were paced like the rest of the API
+  (60 a minute), and the 403 GitHub sends when a limit is hit was not retried. Most exploit
+  searches on a large run were refused, and a refused search returned "nothing found": a false
+  negative that lowered Threat. Search now has its own pace, rate-limit responses are waited out,
+  and a search that still fails is recorded as an evidence gap rather than as no exploit.
+- The rationale of an Accept or Schedule cited the first evidence line recorded, not the one
+  that lowered the score: "hard to reach in this environment — Attack vector is network" gives
+  a reason something *is* reachable. It now cites the evidence that lowered the weakest factor
+  (no call path, not internet-reachable, compensating controls, local vector, ...) and adds the
+  strongest from the other factors under "Also".
+- "Little sign anyone will try" overstated what a low EPSS score means, and was used even when
+  public exploit code exists. The lead is now "exploitation unlikely in the next 30 days", and
+  "no exploitation data yet" when there is no EPSS score.
+- The Method sheet listed OSV, GitHub Security Advisories and a GitHub exploit search as data
+  sources and said the code path could not be verified, whichever lens ran. It now states the
+  sources the run's lens actually used, where exploit evidence came from, and how many findings
+  had the scanner's call-path analysis applied.
 
 - The rationale and directive said "No fixed version published" whenever no fix was known, but
   the signal lens never looks fixed versions up (only full and forensic query OSV and GitHub

@@ -441,3 +441,52 @@ def test_duplicate_rows_keep_the_least_favourable_call_graph_verdict():
     assert asyncio.run(run("No Path Found", "Reachable"))[0].code_reachability == "reachable"
     assert asyncio.run(run("No Path Found", "Not Applicable"))[0].code_reachability == ""
     assert asyncio.run(run("No Path Found", "No Path Found"))[0].code_reachability == "unreachable"
+
+
+def test_fixed_versions_follow_the_package_the_issue_names():
+    from vulnometry.assessment import _fix_versions
+    from vulnometry.schema import Bulletin, Remedy
+
+    bulletins = [Bulletin(ref="GHSA-1", remedies=[
+        Remedy(ecosystem="Maven", component="com.fasterxml.jackson.core:jackson-core", fixed_in="2.18.6"),
+        Remedy(ecosystem="Maven", component="tools.jackson.core:jackson-core", fixed_in="3.0.4"),
+    ])]
+    assert _fix_versions(bulletins, "SNYK-JAVA-COMFASTERXMLJACKSONCORE-17440598") == [
+        "com.fasterxml.jackson.core:jackson-core 2.18.6"]
+    assert _fix_versions(bulletins, "SNYK-JAVA-TOOLSJACKSONCORE-17440597") == ["tools.jackson.core:jackson-core 3.0.4"]
+    assert len(_fix_versions(bulletins, "")) == 2, "no issue id: every fix"
+    assert len(_fix_versions(bulletins, "SNYK-JS-LODASH-1")) == 2, "no match: every fix rather than none"
+    npm = [Bulletin(ref="GHSA-2", remedies=[Remedy(component="@angular/core", fixed_in="19.2.1"),
+                                            Remedy(component="@angular/compiler", fixed_in="19.2.1")])]
+    assert _fix_versions(npm, "SNYK-JS-ANGULARCORE-123") == ["@angular/core 19.2.1"]
+
+
+def test_github_rate_limit_is_recognised_and_waited_out():
+    import time
+
+    import httpx
+
+    from vulnometry.net import _rate_limit_delay, _rate_limited
+
+    limited = httpx.Response(403, headers={"x-ratelimit-remaining": "0",
+                                           "x-ratelimit-reset": str(int(time.time()) + 30)},
+                             text='{"message":"API rate limit exceeded"}')
+    assert _rate_limited(limited)
+    assert 20 <= _rate_limit_delay(limited) <= 32
+    secondary = httpx.Response(403, text='{"message":"You have exceeded a secondary rate limit"}')
+    assert _rate_limited(secondary) and _rate_limit_delay(secondary) == 60.0
+    forbidden = httpx.Response(403, text='{"message":"Resource not accessible by integration"}')
+    assert not _rate_limited(forbidden), "a real 403 is still an error"
+
+
+def test_a_failed_exploit_search_is_a_gap_not_an_empty_result(monkeypatch):
+    from vulnometry.feeds import advisories
+    from vulnometry.net import FeedError
+
+    class Failing:
+        async def get_json(self, *a, **k):
+            raise FeedError("github-search", "rate limited")
+
+    monkeypatch.setattr(advisories, "client", lambda: Failing())
+    with pytest.raises(FeedError):
+        asyncio.run(advisories.exploit_artifacts("CVE-2021-44228"))

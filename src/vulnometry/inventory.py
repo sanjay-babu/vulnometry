@@ -38,10 +38,12 @@ class SlaPolicy:
         sla:
           days: {Contain: 10, Remediate: 45, Schedule: 100}
           scale: false      # the same window for every tier, regime and environment
+          review_days: 90   # accepted risks are re-reviewed (and scanner suppressions expire) after this
     """
 
     days: dict[str, int] = field(default_factory=lambda: dict(BASE_SLA))
     scale: bool = True
+    review_days: int = 90
 
     @classmethod
     def from_dict(cls, raw) -> SlaPolicy:
@@ -57,11 +59,14 @@ class SlaPolicy:
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise ValueError(f"sla.days.{name} should be a whole number of days, got {value!r}")
             days[name] = value
-        return cls(days=days, scale=bool(raw.get("scale", True)))
+        review = raw.get("review_days", 90)
+        if not isinstance(review, int) or isinstance(review, bool) or review < 1:
+            raise ValueError(f"sla.review_days should be a whole number of days, got {review!r}")
+        return cls(days=days, scale=bool(raw.get("scale", True)), review_days=review)
 
     @property
     def is_default(self) -> bool:
-        return self.days == BASE_SLA and self.scale
+        return self.days == BASE_SLA and self.scale and self.review_days == 90
 
     def describe(self) -> str:
         windows = " · ".join(f"{v} {self.days[v]} days" for v in ("Contain", "Remediate", "Schedule"))

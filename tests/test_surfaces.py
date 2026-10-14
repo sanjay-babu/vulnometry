@@ -214,9 +214,9 @@ def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
     assert row["Internet"] == "Internal"
     assert row["EPSS date"] == "2026-09-08"
     assert row["Model"] == MODEL_VERSION
-    assert "little sign anyone will try" in row["Rationale"]
+    assert "exploitation unlikely in the next 30 days" in row["Rationale"]
     assert "EPSS 0.40% (as of 2026-09-08)" in row["Rationale"]
-    assert row["Decision"] == "Accept risk / suppress in scanner"
+    assert row["Decision"] == "Accept risk; suppress in scanner"
     assert "EPSS >= 0.10" in row["Reopen triggers"]
     assert "CISA KEV" in row["Reopen triggers"]
 
@@ -330,8 +330,8 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
     path = build_workbook(_sample(), tmp_path / "out.xlsx",
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
-    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Action Plan", "Accepted",
-                                   "By Owner", "Method"]
+    assert workbook.sheetnames == ["Findings", "Manual review", "Engineering - fix", "DevSecOps - suppress",
+                                   "Action Plan", "Accepted", "By Owner", "Method"]
     rows = _table(workbook["Findings"], ["CVE", "Verdict", "Judgment"])
     assert rows[0] == {"CVE": "CVE-2021-44228", "Verdict": "Contain", "Judgment": "Fix"}
     assert workbook["Findings"].auto_filter.ref
@@ -358,13 +358,13 @@ def _snyk_like_rows():
                    source_title="Improper validation", source_row=3,
                    exposure=ExposureMeasure(index=500, verdict="Remediate")),
         Assessment(cve_id="CVE-2026-2001", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
-                   source_row=4, exposure=ExposureMeasure(index=100, verdict="Accept")),
+                   source_row=4, exposure=ExposureMeasure(index=100, verdict="Accept", confidence="high")),
         Assessment(cve_id="CVE-2026-2002", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
                    due_by="2027-02-01", source_row=4, exposure=ExposureMeasure(index=200, verdict="Schedule")),
         Assessment(cve_id="CVE-2026-3001", source_asset="orphan", scanner="Snyk", scanner_severity="Critical",
-                   source_row=5, exposure=ExposureMeasure(index=60, verdict="Accept")),
+                   source_row=5, exposure=ExposureMeasure(index=60, verdict="Accept", confidence="high")),
         Assessment(cve_id="CVE-2026-4001", asset="checkout-api", scanner="Snyk", scanner_severity="Low",
-                   source_row=6, exposure=ExposureMeasure(index=40, verdict="Accept")),
+                   source_row=6, exposure=ExposureMeasure(index=40, verdict="Accept", confidence="high")),
     ]
     not_scored = not_scored_summary([{"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license",
                                       "row": 7, "issue_url": "https://scanner.example/p2#issue-snyk:lic:gpl"}])
@@ -410,13 +410,16 @@ def test_the_lists_are_filters_of_findings(tmp_path):
     items, summary = _snyk_like_rows()
     workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
     review = sorted(r["Export row"] for r in _table(workbook["Manual review"], ["Export row"]))
-    to_fix = sorted(r["Export row"] for r in _table(workbook["To fix"], ["Export row"]))
+    engineering = sorted(r["Export row"] for r in _table(workbook["Engineering - fix"], ["Export row"]))
+    assert engineering == [2, 3, 4, 5, 7], "everything that is not an accepted risk, unreviewed rows included"
+    to_fix = [r for r in engineering if r not in review]
     accepted = sorted(r["Export row"] for r in _table(workbook["Accepted"], ["Export row"]))
     assert review == [5, 7]
     assert to_fix == [2, 3, 4]
     assert accepted == [6], "a worst-case Accept on an unmatched project is never on Accepted"
     assert sorted(review + to_fix + accepted) == [2, 3, 4, 5, 6, 7]
-    assert "1 more scored Accept only on worst-case defaults" in workbook["Accepted"].cell(row=2, column=1).value
+    assert "1 more scored Accept but are left off (Not analysed: 1 with no inventory match, 0 with too little" \
+        in workbook["Accepted"].cell(row=2, column=1).value
     assert _counts(workbook["Manual review"])["Total"] == 2
 
 
@@ -467,3 +470,107 @@ def test_no_fix_is_only_claimed_when_fixes_were_looked_up():
     assert "Scanner fixability: Fixable" in with_scanner
     assert "Upgrade to axios 1.15.1" in directive_for(urgent, Kev(cve_id="x"), ["axios 1.15.1"],
                                                        AssetProfile(name="api"))
+
+
+def test_accept_rationale_cites_what_lowered_the_score():
+    item = Assessment(
+        cve_id="CVE-2026-5001", asset="billing", internet_exposed=False, tier=2,
+        exposure=ExposureMeasure(
+            index=60, verdict="Accept", threat=0.3, reachability=0.1, consequence=0.8, confidence="high",
+            threat_basis=["EPSS puts exploitation within 30 days at 0.40%, ahead of 30% of all CVEs"],
+            reachability_basis=["Attack vector is network", "billing is not internet-reachable",
+                                "Scanner's reachability analysis found no call path to the vulnerable function"],
+            consequence_basis=["CVSS impact C:HIGH I:HIGH A:HIGH"]))
+    text = item.rationale()
+    assert text.startswith("Accept: hard to reach in this environment — scanner's reachability analysis found no "
+                           "call path to the vulnerable function; billing is not internet-reachable.")
+    assert "Attack vector is network" not in text.split("Context:")[0], "a reason to reach is not a reason not to"
+    assert "Also: EPSS puts exploitation within 30 days at 0.40%" in text
+
+    item.exposure.threat_basis = ["No EPSS score, usually a very new CVE, so treat as unresolved rather than safe"]
+    item.exposure.threat, item.exposure.reachability = 0.1, 0.5
+    assert item.rationale().startswith("Accept: no exploitation data yet"), "never 'little sign anyone will try'"
+
+
+def test_an_accept_without_enough_data_is_not_analysed(tmp_path):
+    from openpyxl import load_workbook
+
+    items = [Assessment(cve_id="CVE-2026-6001", asset="api", source_row=2, scanner_severity="High",
+                        gaps=["No EPSS score retrieved"],
+                        exposure=ExposureMeasure(index=50, verdict="Accept", confidence="medium")),
+             Assessment(cve_id="CVE-2026-6002", asset="api", source_row=3, scanner_severity="High",
+                        exposure=ExposureMeasure(index=50, verdict="Accept", confidence="high"))]
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", None))
+    rows = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Judgment",
+                                                                      "Not analysed because", "Rationale"])}
+    assert rows[2]["Judgment"] == "Not analysed" and rows[2]["Not analysed because"] == "Insufficient data"
+    assert "not enough data to accept this risk (No EPSS score retrieved; confidence medium)" in rows[2]["Rationale"]
+    assert rows[3]["Judgment"] == "Accept"
+    assert [r["Export row"] for r in _table(workbook["Accepted"], ["Export row"])] == [3]
+
+
+def test_licence_rows_say_so_and_issue_type_is_shown(tmp_path):
+    from openpyxl import load_workbook
+
+    from vulnometry.assessment import not_scored_summary
+
+    not_scored = not_scored_summary([
+        {"raw_severity": "Medium", "asset": "web", "title": "GPL-3.0 license", "row": 2, "issue_type": "License"},
+        {"raw_severity": "High", "asset": "web", "title": "Prototype pollution", "row": 3,
+         "issue_type": "Vulnerability"},
+    ])
+    workbook = load_workbook(build_workbook([], tmp_path / "out.xlsx", {"not_scored": not_scored, "assessed": 0,
+                                                                        "actionable": 0, "suppressed_by_context": 0,
+                                                                        "unattributed": 0}))
+    rows = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Issue type",
+                                                                      "Not analysed because", "Rationale"])}
+    assert rows[2]["Issue type"] == "License" and rows[2]["Not analysed because"] == "Licence issue"
+    assert "a licence issue, not a vulnerability" in rows[2]["Rationale"]
+    assert rows[3]["Issue type"] == "Vulnerability" and rows[3]["Not analysed because"] == "No CVE identifier"
+
+
+def test_scanner_exploit_maturity_is_stated_in_the_rationale():
+    item = Assessment(cve_id="CVE-2026-7001", asset="api", scanner_exploit_maturity="Proof of Concept",
+                      exposure=ExposureMeasure(index=80, verdict="Accept", threat=0.2, reachability=0.5,
+                                               consequence=0.8, confidence="high",
+                                               threat_basis=["EPSS puts exploitation within 30 days at 0.30%"]))
+    text = item.rationale()
+    assert text.startswith("Accept: exploitation unlikely in the next 30 days")
+    assert "scanner exploit maturity: Proof of Concept" in text, "a known exploit is never left unsaid"
+
+
+def test_devsecops_gets_only_what_is_safe_to_suppress(tmp_path):
+    from openpyxl import load_workbook
+
+    def accept(row, **kw):
+        return Assessment(cve_id=f"CVE-2026-{8000 + row}", asset="api", source_row=row, scanner_severity="High",
+                          issue_id=f"SNYK-JS-X-{row}", issue_url=f"https://s.example/p#issue-SNYK-JS-X-{row}",
+                          measured_at="2026-10-14T20:00:00+00:00",
+                          exposure=ExposureMeasure(index=60, verdict="Accept", confidence="high", threat=0.2,
+                                                   reachability=0.1, consequence=0.8, model_version="bei-1.1",
+                                                   reachability_basis=["api is not internet-reachable"]),
+                          **kw)
+
+    items = [accept(2), accept(3, code_reachability="reachable"), accept(4, scanner_exploit_maturity="Mature"),
+             accept(5, exploitation=ConfirmedExploitation(cve_id="x", confirmed=True)),
+             Assessment(cve_id="CVE-2026-9000", asset="api", source_row=6, due_by="2027-02-11",
+                        fixes=["axios 1.15.1"], exposure=ExposureMeasure(index=200, verdict="Schedule"))]
+    summary = {"assessed": 5, "actionable": 0, "suppressed_by_context": 0, "unattributed": 0, "review_days": 182}
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+
+    suppress = _table(workbook["DevSecOps - suppress"], ["Export row", "Issue ID", "Suppress until", "Ignore type",
+                                                         "Ignore reason"])
+    assert [r["Export row"] for r in suppress] == [2]
+    assert suppress[0]["Suppress until"] == "2027-04-14", "182 days after the assessment"
+    assert suppress[0]["Ignore type"] == "temporary-ignore"
+    assert suppress[0]["Ignore reason"].startswith("Risk accepted: vulnometry bei-1.1 Accept (BEI 60) on 2026-10-14")
+    assert "Re-review by 2027-04-14" in suppress[0]["Ignore reason"]
+
+    accepted = {r["Export row"]: r["Suppress in scanner"]
+                for r in _table(workbook["Accepted"], ["Export row", "Suppress in scanner"])}
+    assert accepted[2] == "Yes"
+    assert "call path" in accepted[3] and "mature exploit" in accepted[4] and "CISA KEV" in accepted[5]
+
+    fix = _table(workbook["Engineering - fix"], ["Export row", "Fixed in", "Due by"])
+    assert fix == [{"Export row": 6, "Fixed in": "axios 1.15.1", "Due by": "2027-02-11"}], \
+        "accepted rows, suppressed or kept open, are not engineering's"

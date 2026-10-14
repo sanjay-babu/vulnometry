@@ -268,7 +268,8 @@ poetry.lock, package-lock.json, go.mod, Gemfile.lock, Cargo.lock, pom.xml, Cyclo
 
 The workbook it writes has these sheets: Findings (every finding, colour-coded, filterable,
 frozen header, one row per export row with its judgment and a plain-language Rationale column),
-Manual review (rows judged Not analysed), To fix (Fix and Schedule by due date), Action Plan (Contain and Remediate, sorted by due date), Accepted
+Manual review (rows judged Not analysed), Engineering - fix (everything not accepted), DevSecOps -
+suppress (accepted rows safe to suppress, with expiry), Action Plan (Contain and Remediate, sorted by due date), Accepted
 (analysed findings below the action threshold, with the rationale, the EPSS score and its date,
 internet exposure, evidence gaps, model version and timestamp, plus blank columns for who
 accepted it, the review-by date and what should reopen it), By Owner (workload per team), and
@@ -281,10 +282,16 @@ as licence issues and scanner-only advisories, can't be scored. They are not dro
 the Manual review sheet and `summary.not_scored` in JSON list each one with its scanner severity,
 so the report still accounts for every row in the export.
 
+Two sheets are hand-offs. *Engineering - fix* lists everything that is not an accepted risk:
+what to fix, by due date, with the version to upgrade to, then what could not be judged.
+*DevSecOps - suppress* lists the accepted rows that are safe to hide in the scanner, each with
+an ignore reason and an expiry (`sla.review_days`); accepted rows the scanner's own evidence
+argues against hiding (call path found, mature exploit, CISA KEV) stay open.
+
 Findings has one row per row of the export: nothing is merged, so the row count matches the
 file you were given. Each row is judged Fix, Schedule, Accept or Not analysed (no inventory
 match, or no CVE) and keeps the scanner's severity, issue ID, project, target and links. Manual
-review, To fix and Accepted are filters of it.
+review, Engineering - fix, DevSecOps - suppress and Accepted are filters of it.
 
 When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
 verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result.
