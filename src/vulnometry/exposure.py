@@ -265,8 +265,15 @@ def directive_for(
     fixes: list[str],
     asset: AssetProfile,
     due_by: str = "",
+    fixes_checked: bool = True,
+    scanner_fixability: str = "",
 ) -> str:
-    """The action sentence that goes in the ticket."""
+    """The action sentence that goes in the ticket.
+
+    Only says no fix exists when fix versions were actually looked up (the full and forensic
+    lenses query OSV and GitHub advisories; signal does not). The scanner's own fixability is
+    reported when that is all there is.
+    """
     parts = [VERDICT_MEANING.get(measure.verdict, "Review.")]
 
     if measure.collapsed_by == "not-deployed":
@@ -281,7 +288,9 @@ def directive_for(
         parts.append(f"CISA deadline for federal agencies was {exploitation.federal_deadline}.")
     if fixes:
         parts.append(f"Upgrade to {', '.join(fixes[:3])}.")
-    elif measure.verdict in ("Contain", "Remediate"):
+    elif scanner_fixability and measure.verdict in ("Contain", "Remediate", "Schedule"):
+        parts.append(f"Scanner fixability: {scanner_fixability}; see the scanner issue for the fixed version.")
+    elif fixes_checked and measure.verdict in ("Contain", "Remediate"):
         parts.append("No fixed version published. Apply the vendor mitigation or isolate the service.")
     if measure.confidence == "low":
         parts.append("Confidence is low; the inventory entry or the CVE record is incomplete.")

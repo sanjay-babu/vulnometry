@@ -49,6 +49,8 @@ COLUMN_ALIASES = {
     "project_url": ["projecturl", "repositoryurl", "repourl", "targeturl", "asseturl"],
     "issue_url": ["issueurl", "findingurl", "vulnerabilityurl", "alerturl"],
     "issue_id": ["issueid", "snykid", "problemid", "alertid"],
+    # The scanner's own view of whether a fix exists (Snyk: Fixable / Partially fixable / No supported fix).
+    "fixability": ["computedfixability", "fixability", "fixavailable", "fixstatus", "isfixable"],
 }
 
 _MAX_SCAN_ROWS = 25
@@ -278,6 +280,7 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "project_url": _cell(row, mapping.get("project_url")),
             "issue_url": _cell(row, mapping.get("issue_url")),
             "issue_id": _cell(row, mapping.get("issue_id")),
+            "fixability": _cell(row, mapping.get("fixability")),
         }
         if not cve_ids:
             if unscored is not None:

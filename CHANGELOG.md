@@ -58,6 +58,17 @@ Exposure model `bei-1.1`.
   Accepted the Accept rows with sign-off columns: all filters of Findings. The separate Not
   scored sheet is gone; those rows are on Findings and Manual review.
 
+- The scanner's fixability (e.g. Snyk `COMPUTED_FIXABILITY`: Fixable / Partially fixable / No
+  supported fix) is read, shown in a Scanner fixability column, and used in the rationale and
+  directive when no fixed version was looked up.
+
+### Fixed
+
+- The rationale and directive said "No fixed version published" whenever no fix was known, but
+  the signal lens never looks fixed versions up (only full and forensic query OSV and GitHub
+  advisories), so the claim was made without checking. It is now made only when fixes were
+  looked up; otherwise the scanner's fixability is reported, or nothing.
+
 ### Changed
 
 - `MODEL_VERSION` is `bei-1.1`. Findings without call-graph data score exactly as

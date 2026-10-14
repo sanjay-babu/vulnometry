@@ -249,6 +249,8 @@ class Assessment(Serialisable):
     issue_url: str = ""  # the scanner's link to this issue
     issue_id: str = ""  # the scanner's identifier for this issue
     source_title: str = ""  # the scanner's title for this issue
+    scanner_fixability: str = ""  # the scanner's own view of whether a fix exists
+    fixes_checked: bool = True  # False when fixed versions were not looked up (signal lens)
 
     directive: str = ""
     gaps: list[str] = field(default_factory=list)
@@ -335,7 +337,10 @@ class Assessment(Serialisable):
         parts.append("Context: " + ", ".join(ctx) + ".")
 
         if not self.fixes and e.verdict in ("Accept", "Schedule"):
-            parts.append("No fixed version published.")
+            if self.scanner_fixability:
+                parts.append(f"Scanner fixability: {self.scanner_fixability}.")
+            elif self.fixes_checked:
+                parts.append("No fixed version published.")
         parts.append(f"Confidence: {e.confidence}.")
         return " ".join(parts)
 

@@ -443,3 +443,27 @@ def test_scanner_severity_and_analysed_flag_in_csv():
     assert csv_lines[2].split(",")[3] == "no"
     assert json.loads(to_json(items, {"assessed": 2}))["findings"][1]["analysed"] is False
 
+
+
+def test_no_fix_is_only_claimed_when_fixes_were_looked_up():
+    from vulnometry.exposure import directive_for
+    from vulnometry.inventory import AssetProfile
+    from vulnometry.schema import ConfirmedExploitation as Kev
+
+    def item(**kw):
+        return Assessment(cve_id="CVE-2026-1001", asset="api", exposure=ExposureMeasure(index=100, verdict="Accept"),
+                          **kw)
+
+    assert "No fixed version published" not in item(fixes_checked=False).rationale(), \
+        "the signal lens never looks fixes up, so it must not say there are none"
+    assert "No fixed version published" in item(fixes_checked=True).rationale()
+    assert "Scanner fixability: Fixable." in item(fixes_checked=False, scanner_fixability="Fixable").rationale()
+
+    urgent = ExposureMeasure(index=500, verdict="Remediate")
+    unchecked = directive_for(urgent, Kev(cve_id="x"), [], AssetProfile(name="api"), fixes_checked=False)
+    assert "No fixed version published" not in unchecked
+    with_scanner = directive_for(urgent, Kev(cve_id="x"), [], AssetProfile(name="api"), fixes_checked=False,
+                                 scanner_fixability="Fixable")
+    assert "Scanner fixability: Fixable" in with_scanner
+    assert "Upgrade to axios 1.15.1" in directive_for(urgent, Kev(cve_id="x"), ["axios 1.15.1"],
+                                                       AssetProfile(name="api"))

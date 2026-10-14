@@ -72,6 +72,7 @@ async def assess_finding(
     scanner_severity: str = "",
     scanner: str = "",
     code_reachability: str = "",
+    scanner_fixability: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -142,7 +143,10 @@ async def assess_finding(
         source_host=host,
         source_component=component,
         code_reachability=code_reachability,
-        directive=directive_for(measure, exploitation, fixes, asset, due_by),
+        directive=directive_for(measure, exploitation, fixes, asset, due_by,
+                                fixes_checked=lens in ("full", "forensic"), scanner_fixability=scanner_fixability),
+        fixes_checked=lens in ("full", "forensic"),
+        scanner_fixability=scanner_fixability,
         gaps=gaps,
         lens=lens,
         measured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -209,6 +213,7 @@ async def assess_portfolio(
                 scanner_severity=str(row.get("raw_severity") or "").strip(),
                 scanner=str(row.get("scanner") or "").strip(),
                 code_reachability=row["code_reachability"],
+                scanner_fixability=str(row.get("fixability") or "").strip(),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))

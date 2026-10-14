@@ -300,3 +300,16 @@ def test_project_and_issue_links_are_read(tmp_path):
     assert findings[0]["project_url"] == "https://x/project/1"
     assert findings[0]["issue_url"] == "https://x/project/1#issue-9", "not the CVE link"
     assert findings[0]["row"] == 2
+
+
+def test_scanner_fixability_is_read(tmp_path):
+    from openpyxl import Workbook as _Workbook
+
+    workbook = _Workbook()
+    sheet = workbook.active
+    sheet.append(["ISSUE_SEVERITY", "CVE", "PROJECT_NAME", "COMPUTED_FIXABILITY"])
+    sheet.append(["Critical", "CVE-2026-42035", "svc", "Fixable"])
+    path = tmp_path / "s.xlsx"
+    workbook.save(path)
+    findings, _ = parse_tabular(path)
+    assert findings[0]["fixability"] == "Fixable"
