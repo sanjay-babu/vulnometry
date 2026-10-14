@@ -1,4 +1,4 @@
-"""Annotated Excel output: Findings, Action Plan, Accepted, Not scored, By Owner, Method."""
+"""Annotated Excel output: Findings, Review & Fix, Action Plan, Accepted, Not scored, By Owner, Method."""
 
 from __future__ import annotations
 
@@ -270,6 +270,111 @@ NOT_SCORED_COLUMNS = [
 ]
 
 
+REVIEW_COLUMNS = [
+    ("Why on this list", 26), ("Scanner severity", 11), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
+    ("CVE", 16), ("Asset", 24), ("Scanner ref", 30), ("Owner", 26), ("Scanner rows", 9),
+    ("Component / title", 30), ("Reason", 90), ("Directive", 60),
+]
+_SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+REVIEW_FIX = "Fix"
+REVIEW_NOT_ANALYSED = "Review: not analysed"
+REVIEW_NOT_SCORED = "Review: not scored (no CVE)"
+
+
+def _review_sheet(workbook: Workbook, items: list[Assessment], not_scored: dict | None) -> None:
+    """Everything that is not an accepted risk, on one sheet, so it can be filtered and handed over.
+
+    Three kinds: findings to fix (Contain, Remediate, Schedule), findings that could not be
+    analysed (no inventory match, so no real verdict), and scanner rows with no CVE that could
+    not be scored at all. Only analysed Accepts are left out; they are on the Accepted sheet.
+    """
+    sheet = workbook.create_sheet("Review & Fix", 1)
+    fix = [i for i in items if i.analysed() and i.exposure.verdict != "Accept"]
+    unanalysed = [i for i in items if not i.analysed()]
+    unscored = list((not_scored or {}).get("rows") or [])
+    accepted = [i for i in items if i.analysed() and i.exposure.verdict == "Accept"]
+
+    sheet.cell(row=1, column=1, value="Review & Fix: everything that is not an accepted risk").font = TITLE_FONT
+    sheet.cell(
+        row=2, column=1,
+        value=(f"{len(fix)} to fix, {len(unanalysed)} not analysed, {len(unscored)} not scored. "
+               f"Only the {len(accepted)} analysed Accepts are left out (see Accepted). "
+               "Filter 'Why on this list' or 'Scanner severity' and hand the rows over."),
+    ).font = Font(color="7F8C8D", size=10)
+
+    # Count table: category x scanner severity, so the list reconciles at a glance.
+    bands = ["Critical", "High", "Medium", "Low", "Other"]
+
+    def band(value: str) -> str:
+        b = scanner_band(value)
+        return b if b in _SEVERITY_ORDER else "Other"
+
+    groups = [
+        ("Contain", [band(i.scanner_severity) for i in fix if i.exposure.verdict == "Contain"]),
+        ("Remediate", [band(i.scanner_severity) for i in fix if i.exposure.verdict == "Remediate"]),
+        ("Schedule", [band(i.scanner_severity) for i in fix if i.exposure.verdict == "Schedule"]),
+        ("Not analysed", [band(i.scanner_severity) for i in unanalysed]),
+        ("Not scored (no CVE)", [band(r.get("scanner_severity", "")) for r in unscored]),
+        ("Accepted (not on this list)", [band(i.scanner_severity) for i in accepted]),
+    ]
+    top = 4
+    for col, name in enumerate(["", *bands, "Total"], start=1):
+        sheet.cell(row=top, column=col, value=name)
+    _style_header(sheet, top, len(bands) + 2)
+    for offset, (label, values) in enumerate(groups, start=1):
+        r = top + offset
+        cells = [label, *[values.count(b) for b in bands], len(values)]
+        for col, value in enumerate(cells, start=1):
+            cell = sheet.cell(row=r, column=col, value=value)
+            cell.border = BORDER
+        if label in VERDICT_FILL:
+            sheet.cell(row=r, column=1).fill = VERDICT_FILL[label]
+            sheet.cell(row=r, column=1).font = VERDICT_FONT[label]
+        elif label == NOT_ANALYSED:
+            sheet.cell(row=r, column=1).fill = NOT_ANALYSED_FILL
+            sheet.cell(row=r, column=1).font = NOT_ANALYSED_FONT
+
+    rows: list[list] = []
+    for item in sorted(fix, key=lambda i: (i.due_by or "9999-12-31", -i.exposure.index)):
+        rows.append([REVIEW_FIX, scanner_band(item.scanner_severity), item.exposure.verdict,
+                     item.exposure.index, item.due_by or "", item.cve_id, item.asset, item.scanner_ref(),
+                     item.owner or "", item.source_rows or 1, item.source_component or "",
+                     item.rationale(), item.directive])
+    for item in sorted(unanalysed, key=lambda i: (_SEVERITY_ORDER.get(scanner_band(i.scanner_severity), 4),
+                                                  -i.exposure.index)):
+        rows.append([REVIEW_NOT_ANALYSED, scanner_band(item.scanner_severity), NOT_ANALYSED,
+                     item.exposure.index, "", item.cve_id, "", item.scanner_ref(), item.owner or "",
+                     item.source_rows or 1, item.source_component or "", item.rationale(),
+                     "Map this project to an asset in the inventory and re-run for a real verdict. "
+                     "Until then, triage it on the scanner's severity."])
+    for row in sorted(unscored, key=lambda r: _SEVERITY_ORDER.get(r.get("scanner_severity", ""), 4)):
+        rows.append([REVIEW_NOT_SCORED, row.get("scanner_severity", ""), NOT_ANALYSED, "", "", "",
+                     "", row.get("asset", "") or row.get("host", ""), "", 1, row.get("title", ""),
+                     "No CVE identifier: exposure is scored per CVE, so only the scanner's severity applies.",
+                     "Triage on the scanner's severity."])
+
+    header_row = top + len(groups) + 3
+    for index, (name, _) in enumerate(REVIEW_COLUMNS, start=1):
+        sheet.cell(row=header_row, column=index, value=name)
+    _style_header(sheet, header_row, len(REVIEW_COLUMNS))
+    for offset, values in enumerate(rows, start=1):
+        r = header_row + offset
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row=r, column=column, value=value)
+            cell.border = BORDER
+            cell.alignment = Alignment(vertical="top", wrap_text=column >= 12)
+        verdict = sheet.cell(row=r, column=3)
+        if values[2] in VERDICT_FILL:
+            verdict.fill, verdict.font = VERDICT_FILL[values[2]], VERDICT_FONT[values[2]]
+        else:
+            verdict.fill, verdict.font = NOT_ANALYSED_FILL, NOT_ANALYSED_FONT
+
+    _widths(sheet, REVIEW_COLUMNS)
+    sheet.freeze_panes = sheet.cell(row=header_row + 1, column=1)
+    if rows:
+        sheet.auto_filter.ref = f"A{header_row}:{get_column_letter(len(REVIEW_COLUMNS))}{header_row + len(rows)}"
+
+
 def _not_scored_sheet(workbook: Workbook, not_scored: dict) -> None:
     rows = not_scored.get("rows") or []
     sheet = workbook.create_sheet("Not scored")
@@ -457,6 +562,7 @@ def build_workbook(items: list[Assessment], path: str | Path, summary: dict | No
     _findings_sheet(workbook, items)
     _action_sheet(workbook, items)
     _accepted_sheet(workbook, items)
+    _review_sheet(workbook, items, (summary or {}).get("not_scored"))
     if summary and summary.get("not_scored"):
         _not_scored_sheet(workbook, summary["not_scored"])
     _owner_sheet(workbook, items)

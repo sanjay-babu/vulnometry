@@ -43,6 +43,10 @@ Exposure model `bei-1.1`.
   signed off or suppressed by mistake. The rationale still gives the provisional result. JSON
   findings carry `analysed`, CSV an `analysed` column, and the summary `not_analysed` and
   `by_verdict_analysed`.
+- A Review & Fix sheet lists everything that is not an accepted risk, one row each, ready to
+  filter and hand over: findings to fix (Contain, Remediate, Schedule), findings that could not
+  be analysed, and scanner rows with no CVE. A table at the top counts each group by scanner
+  severity, including the Accepts left off.
 - Every row of a spreadsheet export is accounted for. Findings has a Scanner rows column (how
   many export rows a finding stands for, after duplicates of the same CVE on the same project
   are merged), and the Method sheet reconciles rows in the export to findings
