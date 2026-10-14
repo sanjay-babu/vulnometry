@@ -19,6 +19,17 @@ Exposure model `bei-1.1`.
   verdict wins. `Assessment.code_reachability` carries the normalised value; the
   workbook's Findings and Accepted sheets gain a **Code path** column, the CSV a
   `code_reachability` column, and the rationale mentions it.
+- The scanner's own severity now appears in every output. The workbook has a Scanner
+  severity column on Findings, Action Plan and Accepted, and `--format csv` has a
+  `scanner_severity` column. The value was already read and used for the severity crosstab,
+  but a reader could not see it against each verdict.
+- Findings has a Match column (`inventory` or `scanner-ref only`), so findings scored without
+  business context can be filtered out directly.
+- Rows in a spreadsheet or CSV export that carry no CVE identifier, such as licence issues and
+  scanner-only advisories, are no longer dropped silently. `vulnometry import` says how many
+  there are and lists them on a new Not scored sheet with their scanner severity; JSON output
+  carries them as `summary.not_scored`. `parse_tabular` and `load_findings` take an optional
+  `unscored` list to collect them; callers that pass nothing see no change.
 
 ### Changed
 
