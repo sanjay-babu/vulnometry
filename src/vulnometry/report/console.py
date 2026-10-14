@@ -275,14 +275,14 @@ def to_csv(items: list[Assessment]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "cve", "bei", "verdict", "threat", "reachability", "code_reachability", "consequence",
+        "cve", "bei", "verdict", "scanner_severity", "threat", "reachability", "code_reachability", "consequence",
         "asset", "scanner_ref", "owner", "business_unit", "environment", "due_by", "sla_days",
         "cvss", "epss", "kev", "fixes", "confidence", "directive",
     ])
     for item in items:
         severity = item.weakness.primary_severity()
         writer.writerow([
-            item.cve_id, item.exposure.index, item.exposure.verdict,
+            item.cve_id, item.exposure.index, item.exposure.verdict, item.scanner_severity or "",
             item.exposure.threat, item.exposure.reachability, item.code_reachability,
             item.exposure.consequence,
             item.asset, item.scanner_ref(), item.owner, item.business_unit, item.environment,

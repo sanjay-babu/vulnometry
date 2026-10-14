@@ -115,7 +115,8 @@ async def assess_finding(
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
     fixes = _fix_versions(bulletins)
-    due_by = asset.due_date(measure.verdict)
+    policy = inventory.sla if inventory else None
+    due_by = asset.due_date(measure.verdict, policy=policy)
 
     return Assessment(
         cve_id=cve_id,
@@ -134,7 +135,7 @@ async def assess_finding(
         internet_exposed=asset.internet_exposed,
         data_classification=asset.data_classification,
         due_by=due_by,
-        sla_days=asset.sla_days(measure.verdict) or None,
+        sla_days=asset.sla_days(measure.verdict, policy) or None,
         scanner=scanner,
         scanner_severity=scanner_severity,
         source_asset=asset_name,
@@ -376,6 +377,27 @@ def reduction_funnel(assessments: list[Assessment],
         "analyst_hours_saved_high": round(
             max(0, len(urgent_on_severity) - len(actionable)) * high / 60, 1
         ),
+    }
+
+
+def not_scored_summary(rows: list[dict]) -> dict:
+    """Rows the scanner exported that carry no CVE, so the model could not score them.
+
+    Listed rather than dropped, with the scanner's own severity, so a report still
+    accounts for every row the reader can see in the scanner.
+    """
+    by_severity: Counter = Counter(scanner_band(r.get("raw_severity", "")) or "unrated" for r in rows)
+    keys = [b for b in SEVERITY_BANDS if b in by_severity]
+    keys += sorted(k for k in by_severity if k not in SEVERITY_BANDS)
+    return {
+        "count": len(rows),
+        "by_scanner_severity": {k: by_severity[k] for k in keys},
+        "rows": [
+            {"scanner_severity": scanner_band(r.get("raw_severity", "")), "asset": r.get("asset", ""),
+             "host": r.get("host", ""), "component": r.get("component", ""),
+             "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier")}
+            for r in rows
+        ],
     }
 
 
