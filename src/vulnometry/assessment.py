@@ -168,7 +168,9 @@ async def assess_portfolio(
             cve = canonical_cve(cve)
         except ValueError:
             continue
-        key = (cve, row.get("asset", ""), row.get("host", ""), row.get("component", ""))
+        # Rows of a spreadsheet export are never merged with each other: two scanner issues are two
+        # decisions even when they share a CVE and a project. Only a repeat within one row collapses.
+        key = (cve, row.get("asset", ""), row.get("host", ""), row.get("component", ""), row.get("row", ""))
         reach = canonical_code_reachability(row.get("code_reachability"))
         if key in seen:
             seen[key]["_rows"] += 1
@@ -216,6 +218,8 @@ async def assess_portfolio(
         result.duplicate_rows = row["_duplicates"]
         result.source_url = row.get("project_url", "")
         result.issue_url = row.get("issue_url", "")
+        result.issue_id = row.get("issue_id", "") or issue_id_from(result.issue_url)
+        result.source_title = row.get("title", "")
     return sorted(results, key=lambda a: a.exposure.index, reverse=True)
 
 
@@ -412,9 +416,75 @@ def not_scored_summary(rows: list[dict]) -> dict:
              "host": r.get("host", ""), "component": r.get("component", ""),
              "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier"),
              "row": r.get("row", 0), "project_url": r.get("project_url", ""),
-             "issue_url": r.get("issue_url", "")}
+             "issue_url": r.get("issue_url", ""),
+             "issue_id": r.get("issue_id", "") or issue_id_from(r.get("issue_url", ""))}
             for r in rows
         ],
+    }
+
+
+NOT_ANALYSED = "Not analysed"
+JUDGMENT = {"Contain": "Fix", "Remediate": "Fix", "Schedule": "Schedule", "Accept": "Accept"}
+JUDGMENT_ORDER = ["Fix", "Schedule", NOT_ANALYSED, "Accept"]
+
+
+def issue_id_from(url: str) -> str:
+    """The scanner's issue identifier, when its link carries one (Snyk: ...#issue-SNYK-JS-AXIOS-123)."""
+    text = (url or "").strip()
+    return text.split("#issue-", 1)[1] if "#issue-" in text else ""
+
+
+def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | None = None) -> list[dict]:
+    """One record per row of the scanner export, each with a judgment: Fix, Schedule, Accept or Not analysed.
+
+    A row listing several CVEs is judged on its worst one. Rows the model could not score (no CVE)
+    and findings it could not analyse (no inventory match) are 'Not analysed', with the reason.
+    Findings that came from something other than a spreadsheet have no row number and are one
+    record each. When the same issue link appears on two rows, the later one notes the earlier.
+    """
+    grouped: dict[int, list[Assessment]] = {}
+    records: list[dict] = []
+    for item in assessments:
+        if item.source_row:
+            grouped.setdefault(item.source_row, []).append(item)
+        else:
+            records.append(_record(0, item, [item.cve_id]))
+    for row, group in grouped.items():
+        lead = max(group, key=lambda a: a.exposure.index)
+        records.append(_record(row, lead, sorted({a.cve_id for a in group})))
+    for r in not_scored_rows or []:
+        records.append({
+            "row": r.get("row", 0), "item": None, "cves": [], "scanner_severity": r.get("scanner_severity", ""),
+            "title": r.get("title", ""), "project": r.get("asset", ""), "target": r.get("host", ""),
+            "project_url": r.get("project_url", ""), "issue_url": r.get("issue_url", ""),
+            "issue_id": r.get("issue_id", ""), "analysed": False, "verdict": NOT_ANALYSED,
+            "judgment": NOT_ANALYSED, "why_not": "No CVE identifier",
+            "reason": "Not analysed: no CVE identifier (a licence issue or a scanner-only advisory). Exposure is "
+                      "scored per CVE, so only the scanner's severity applies.",
+            "duplicate_of": None,
+        })
+    first_seen: dict[str, int] = {}
+    for rec in sorted(records, key=lambda r: r["row"] or 10**9):
+        url = rec["issue_url"]
+        if url and rec["row"]:
+            if url in first_seen:
+                rec["duplicate_of"] = first_seen[url]
+            else:
+                first_seen[url] = rec["row"]
+    return records
+
+
+def _record(row: int, item: Assessment, cves: list[str]) -> dict:
+    analysed = item.analysed()
+    return {
+        "row": row, "item": item, "cves": cves, "scanner_severity": scanner_band(item.scanner_severity),
+        "title": item.source_title, "project": item.source_asset, "target": item.source_host,
+        "project_url": item.source_url, "issue_url": item.issue_url, "issue_id": item.issue_id,
+        "analysed": analysed,
+        "verdict": item.exposure.verdict if analysed else NOT_ANALYSED,
+        "judgment": JUDGMENT.get(item.exposure.verdict, item.exposure.verdict) if analysed else NOT_ANALYSED,
+        "why_not": "" if analysed else "No inventory match",
+        "reason": item.rationale(), "duplicate_of": None,
     }
 
 

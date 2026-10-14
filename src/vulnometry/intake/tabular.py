@@ -48,6 +48,7 @@ COLUMN_ALIASES = {
     # Links back into the scanner, so a reader can open the project or the issue.
     "project_url": ["projecturl", "repositoryurl", "repourl", "targeturl", "asseturl"],
     "issue_url": ["issueurl", "findingurl", "vulnerabilityurl", "alerturl"],
+    "issue_id": ["issueid", "snykid", "problemid", "alertid"],
 }
 
 _MAX_SCAN_ROWS = 25
@@ -276,6 +277,7 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "title": _cell(row, mapping.get("title")),
             "project_url": _cell(row, mapping.get("project_url")),
             "issue_url": _cell(row, mapping.get("issue_url")),
+            "issue_id": _cell(row, mapping.get("issue_id")),
         }
         if not cve_ids:
             if unscored is not None:

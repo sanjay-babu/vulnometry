@@ -187,25 +187,6 @@ def _sample() -> list[Assessment]:
     ]
 
 
-def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
-    from openpyxl import load_workbook
-
-    path = build_workbook(_sample(), tmp_path / "out.xlsx",
-                          {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
-    workbook = load_workbook(path)
-    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Duplicates from scanner",
-                                   "Action Plan", "Accepted", "By Owner", "Method"]
-
-    findings = workbook["Findings"]
-    assert findings.freeze_panes == "B5"
-    assert findings.auto_filter.ref
-    assert findings.cell(row=5, column=1).value == "CVE-2021-44228"
-    assert findings.cell(row=5, column=3).value == "Contain"
-    assert "Rationale" in [c.value for c in findings[4]]
-    assert workbook["Action Plan"].cell(row=5, column=2).value == "CVE-2021-44228"
-    assert workbook["Action Plan"].cell(row=6, column=2).value is None
-
-
 def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
     from openpyxl import load_workbook
 
@@ -238,30 +219,6 @@ def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
     assert row["Decision"] == "Accept risk / suppress in scanner"
     assert "EPSS >= 0.10" in row["Reopen triggers"]
     assert "CISA KEV" in row["Reopen triggers"]
-
-
-def test_scanner_severity_is_carried_into_every_output(tmp_path):
-    from openpyxl import load_workbook
-
-    items = _sample()
-    items[0].scanner_severity = "CRITICAL"
-    items[1].scanner_severity = "moderate"
-    items[1].asset = ""
-    items[1].source_asset = "legacy-batch-job"
-    sheet = load_workbook(build_workbook(items, tmp_path / "out.xlsx", None))["Findings"]
-    header = [c.value for c in sheet[4]]
-    rows = [{header[i]: sheet.cell(row=r, column=i + 1).value for i in range(len(header))} for r in (5, 6)]
-    assert [r["Scanner severity"] for r in rows] == ["Critical", "Medium"]
-    assert [r["Analysis"] for r in rows] == ["Analysed", "Not analysed"]
-    assert rows[1]["Rationale"].startswith("Not analysed: 'legacy-batch-job' matched no asset")
-    assert "worst-case" in rows[1]["Rationale"]
-    assert not rows[0]["Rationale"].startswith("Not analysed")
-    assert header.index("Rationale") == len(header) - 2, "free-text columns stay last"
-
-    csv_lines = to_csv(items).splitlines()
-    assert csv_lines[0].startswith("cve,bei,verdict,analysed,scanner_severity,")
-    assert csv_lines[1].startswith("CVE-2021-44228,928.9,Contain,yes,CRITICAL,")
-    assert csv_lines[2].split(",")[3] == "no"
 
 
 def test_rows_the_model_could_not_score_are_summarised(tmp_path):
@@ -349,112 +306,140 @@ def test_the_package_version_matches_pyproject():
     assert vulnometry.__version__ == declared.group(1)
 
 
-def test_not_analysed_findings_show_no_verdict_and_are_never_accepted(tmp_path):
-    from openpyxl import load_workbook
-
-    items = _sample()
-    items.append(Assessment(cve_id="CVE-2024-1111", source_asset="orphan-service", source_rows=3,
-                            exposure=ExposureMeasure(index=40.0, verdict="Accept", threat=0.1,
-                                                     reachability=0.5, consequence=0.5)))
-    summary = {"assessed": 3, "actionable": 1, "suppressed_by_context": 1, "unattributed": 1,
-               "not_analysed": 1,
-               "intake": {"export_rows": 6, "rows_without_cve": 1, "rows_with_cve": 5, "cve_entries": 5,
-                          "scored_entries": 5, "findings": 3, "merged_duplicates": 2, "limited": False}}
-    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
-
-    findings = workbook["Findings"]
-    header = [c.value for c in findings[4]]
-    rows = {findings.cell(row=r, column=1).value:
-            {header[i]: findings.cell(row=r, column=i + 1).value for i in range(len(header))}
-            for r in range(5, 8)}
-    orphan = rows["CVE-2024-1111"]
-    assert orphan["Verdict"] == "Not analysed", "a worst-case Accept must not read as Accept"
-    assert orphan["Analysis"] == "Not analysed"
-    assert orphan["Scanner rows"] == 3
-    assert "Do not accept or suppress it" in orphan["Rationale"]
-    assert rows["CVE-2021-44228"]["Verdict"] == "Contain"
-
-    accepted = workbook["Accepted"]
-    listed = [accepted.cell(row=r, column=1).value for r in range(5, accepted.max_row + 1)]
-    assert "CVE-2024-1111" not in listed
-    assert "1 more scored Accept only on worst-case defaults" in accepted.cell(row=2, column=1).value
-
-    method = {str(r[0].value).strip(): r[1].value for r in workbook["Method"].iter_rows() if r[0].value}
-    assert method["Rows in the export"] == 6
-    assert method["Findings"] == 3
-    assert method["Merged duplicates"].startswith("2 ")
-    assert "Not analysed" in method
-    assert json.loads(to_json(items, summary))["findings"][2]["analysed"] is False
+def _header_row(sheet):
+    return next(r for r in range(1, 40) if sheet.cell(row=r, column=1).value == "Export row")
 
 
-def _list_on(sheet, columns):
-    header_row = next(r for r in range(1, 40) if sheet.cell(row=r, column=1).value == "Why on this list")
+def _table(sheet, columns):
+    """The listed rows of a sheet as dicts of the named columns."""
+    header_row = _header_row(sheet)
     header = [c.value for c in sheet[header_row]]
-    return header_row, [[sheet.cell(row=r, column=header.index(c) + 1).value for c in columns]
-                        for r in range(header_row + 1, sheet.max_row + 1)]
+    return [{c: sheet.cell(row=r, column=header.index(c) + 1).value for c in columns}
+            for r in range(header_row + 1, sheet.max_row + 1)]
 
 
-def test_manual_review_and_duplicates_account_for_every_row(tmp_path):
+def _counts(sheet):
+    """The count table at the top: label -> total."""
+    return {sheet.cell(row=r, column=1).value: sheet.cell(row=r, column=7).value
+            for r in range(5, _header_row(sheet) - 1) if sheet.cell(row=r, column=1).value}
+
+
+def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
     from openpyxl import load_workbook
 
+    path = build_workbook(_sample(), tmp_path / "out.xlsx",
+                          {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
+    workbook = load_workbook(path)
+    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Action Plan", "Accepted",
+                                   "By Owner", "Method"]
+    rows = _table(workbook["Findings"], ["CVE", "Verdict", "Judgment"])
+    assert rows[0] == {"CVE": "CVE-2021-44228", "Verdict": "Contain", "Judgment": "Fix"}
+    assert workbook["Findings"].auto_filter.ref
+    action = workbook["Action Plan"]
+    assert action.cell(row=5, column=3).value == "CVE-2021-44228"
+    assert action.cell(row=6, column=3).value is None
+
+
+def _snyk_like_rows():
+    """Two scanner rows that share a CVE and a project but are different issues, one row with two
+    CVEs, one unmatched project, and one row with no CVE."""
     from vulnometry.assessment import not_scored_summary
 
-    url = "https://scanner.example/project/p1"
+    url = "https://scanner.example/org/o/project/p1"
     items = [
-        Assessment(cve_id="CVE-1", asset="checkout-api", scanner="Snyk", scanner_severity="High",
+        Assessment(cve_id="CVE-2026-1001", asset="checkout-api", scanner="Snyk", scanner_severity="High",
                    due_by="2026-11-01", source_asset="checkout-svc", source_host="checkout_ci",
-                   source_url=url, issue_url=url + "#issue-A", source_row=2, source_rows=3,
-                   duplicate_rows=[{"row": 7, "scanner_severity": "High", "title": "RCE",
-                                    "issue_url": url + "#issue-B"},
-                                   {"row": 9, "scanner_severity": "Critical", "title": "RCE",
-                                    "issue_url": url + "#issue-C"}],
+                   source_url=url, issue_url=url + "#issue-SNYK-JS-AXIOS-1", issue_id="SNYK-JS-AXIOS-1",
+                   source_title="Improper validation", source_row=2,
                    exposure=ExposureMeasure(index=500, verdict="Remediate")),
-        Assessment(cve_id="CVE-2", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
-                   due_by="2027-01-01", source_row=3, exposure=ExposureMeasure(index=200, verdict="Schedule")),
-        Assessment(cve_id="CVE-3", asset="checkout-api", scanner="Snyk", scanner_severity="Critical",
-                   source_row=4, exposure=ExposureMeasure(index=50, verdict="Accept")),
-        Assessment(cve_id="CVE-4", source_asset="orphan", scanner="Snyk", scanner_severity="Critical",
-                   source_url="https://scanner.example/project/p9", source_row=5,
-                   exposure=ExposureMeasure(index=60, verdict="Accept")),
+        Assessment(cve_id="CVE-2026-1001", asset="checkout-api", scanner="Snyk", scanner_severity="High",
+                   due_by="2026-11-01", source_asset="checkout-svc", source_host="checkout_ci",
+                   source_url=url, issue_url=url + "#issue-SNYK-JS-AXIOS-2", issue_id="SNYK-JS-AXIOS-2",
+                   source_title="Improper validation", source_row=3,
+                   exposure=ExposureMeasure(index=500, verdict="Remediate")),
+        Assessment(cve_id="CVE-2026-2001", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
+                   source_row=4, exposure=ExposureMeasure(index=100, verdict="Accept")),
+        Assessment(cve_id="CVE-2026-2002", asset="checkout-api", scanner="Snyk", scanner_severity="Medium",
+                   due_by="2027-02-01", source_row=4, exposure=ExposureMeasure(index=200, verdict="Schedule")),
+        Assessment(cve_id="CVE-2026-3001", source_asset="orphan", scanner="Snyk", scanner_severity="Critical",
+                   source_row=5, exposure=ExposureMeasure(index=60, verdict="Accept")),
+        Assessment(cve_id="CVE-2026-4001", asset="checkout-api", scanner="Snyk", scanner_severity="Low",
+                   source_row=6, exposure=ExposureMeasure(index=40, verdict="Accept")),
     ]
     not_scored = not_scored_summary([{"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license",
-                                      "row": 6}])
-    summary = {"assessed": 4, "actionable": 1, "suppressed_by_context": 0, "unattributed": 1,
+                                      "row": 7, "issue_url": "https://scanner.example/p2#issue-snyk:lic:gpl"}])
+    summary = {"assessed": 6, "actionable": 2, "suppressed_by_context": 0, "unattributed": 1,
                "not_scored": not_scored}
+    return items, summary
+
+
+def test_findings_has_one_row_per_scanner_row_and_a_judgment_for_each(tmp_path):
+    from openpyxl import load_workbook
+
+    items, summary = _snyk_like_rows()
     workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
-    assert "Duplicates from Snyk" in workbook.sheetnames, "named after the scanner"
+    findings = _table(workbook["Findings"], ["Export row", "Judgment", "Verdict", "CVE", "Issue ID",
+                                             "Scanner severity", "Project URL", "Issue URL", "Rationale"])
+    by_row = {r["Export row"]: r for r in findings}
+    assert sorted(by_row) == [2, 3, 4, 5, 6, 7], "one row per scanner row, nothing merged or lost"
+    assert by_row[2]["Issue ID"] == "SNYK-JS-AXIOS-1" and by_row[3]["Issue ID"] == "SNYK-JS-AXIOS-2", \
+        "two scanner issues sharing a CVE and project stay two rows"
+    assert by_row[2]["Judgment"] == by_row[3]["Judgment"] == "Fix"
+    assert by_row[4]["CVE"] == "CVE-2026-2001, CVE-2026-2002"
+    assert by_row[4]["Verdict"] == "Schedule", "a row with several CVEs takes the worst"
+    assert by_row[5]["Judgment"] == "Not analysed" and "matched no asset" in by_row[5]["Rationale"]
+    assert by_row[6]["Judgment"] == "Accept"
+    assert by_row[7]["Judgment"] == "Not analysed" and by_row[7]["Scanner severity"] == "Low"
+    assert by_row[7]["Issue ID"] == "snyk:lic:gpl", "the id comes from the issue link"
+    assert by_row[2]["Issue URL"].endswith("#issue-SNYK-JS-AXIOS-1")
 
-    review = workbook["Manual review"]
-    table = {review.cell(row=r, column=1).value: review.cell(row=r, column=7).value for r in range(5, 13)}
-    assert table["Remediate"] == 1 and table["Schedule"] == 1 and table["Accept"] == 1
-    assert table["Not analysed (on this list)"] == 1
-    assert table["Duplicate rows (Duplicates from Snyk)"] == 2
-    assert table["Not scored (on this list)"] == 1
-    assert table["Total"] == 7, "every export row: 4 findings + 2 duplicates + 1 not scored"
+    counts = _counts(workbook["Findings"])
+    assert counts["Total"] == 6
+    assert counts["Remediate"] == 2 and counts["Schedule"] == 1 and counts["Accept"] == 1
+    assert counts["Not analysed (no inventory match)"] == 1 and counts["Not analysed (no CVE)"] == 1
 
-    _, listed = _list_on(review, ["Why on this list", "CVE", "Project", "Project URL", "Export row"])
-    assert listed == [
-        ["Not analysed", "CVE-4", "orphan", "https://scanner.example/project/p9", 5],
-        ["Not scored (no CVE)", None, "web", None, 6],
-    ], "duplicates are not on Manual review"
+    sheet = workbook["Findings"]
+    header = [c.value for c in sheet[_header_row(sheet)]]
+    link = sheet.cell(row=_header_row(sheet) + 1, column=header.index("Issue URL") + 1).hyperlink
+    assert link is not None and "#issue-" in link.target, "links are clickable"
 
-    dups = workbook["Duplicates from Snyk"]
-    header = [c.value for c in dups[4]]
-    got = [{header[i]: dups.cell(row=r, column=i + 1).value for i in range(len(header))} for r in (5, 6)]
-    assert [g["Duplicate: export row"] for g in got] == [9, 7], "worst scanner severity first"
-    assert all(g["Kept: export row"] == 2 and g["Kept: issue URL"] == url + "#issue-A" for g in got)
-    assert got[0]["Duplicate: issue URL"] == url + "#issue-C"
-    assert got[0]["Verdict"] == "Remediate" and got[0]["Project"] == "checkout-svc"
-    assert got[0]["Target"] == "checkout_ci"
-    link = dups.cell(row=5, column=header.index("Duplicate: issue URL") + 1).hyperlink
-    assert link is not None and link.target == url + "#issue-C", "URLs are clickable"
 
-    findings = workbook["Findings"]
-    fheader = [c.value for c in findings[4]]
-    for name in ("Project", "Target", "Project URL", "Issue URL"):
-        assert name in fheader, name
-    first = {fheader[i]: findings.cell(row=5, column=i + 1).value for i in range(len(fheader))}
-    assert first["Project URL"] == url and first["Issue URL"] == url + "#issue-A"
+def test_the_lists_are_filters_of_findings(tmp_path):
+    from openpyxl import load_workbook
 
-    _, fix = _list_on(workbook["To fix"], ["Verdict", "CVE", "Project URL"])
-    assert fix == [["Remediate", "CVE-1", url], ["Schedule", "CVE-2", None]]
+    items, summary = _snyk_like_rows()
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    review = sorted(r["Export row"] for r in _table(workbook["Manual review"], ["Export row"]))
+    to_fix = sorted(r["Export row"] for r in _table(workbook["To fix"], ["Export row"]))
+    accepted = sorted(r["Export row"] for r in _table(workbook["Accepted"], ["Export row"]))
+    assert review == [5, 7]
+    assert to_fix == [2, 3, 4]
+    assert accepted == [6], "a worst-case Accept on an unmatched project is never on Accepted"
+    assert sorted(review + to_fix + accepted) == [2, 3, 4, 5, 6, 7]
+    assert "1 more scored Accept only on worst-case defaults" in workbook["Accepted"].cell(row=2, column=1).value
+    assert _counts(workbook["Manual review"])["Total"] == 2
+
+
+def test_the_same_issue_link_twice_is_flagged_not_merged(tmp_path):
+    from openpyxl import load_workbook
+
+    items, summary = _snyk_like_rows()
+    items[1].issue_url = items[0].issue_url
+    items[1].issue_id = items[0].issue_id
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    rows = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Duplicate of row"])}
+    assert rows[3]["Duplicate of row"] == 2 and rows[2]["Duplicate of row"] is None
+    assert len(rows) == 6
+
+
+def test_scanner_severity_and_analysed_flag_in_csv():
+    items = _sample()
+    items[0].scanner_severity = "CRITICAL"
+    items[1].asset = ""
+    items[1].source_asset = "legacy-batch-job"
+    csv_lines = to_csv(items).splitlines()
+    assert csv_lines[0].startswith("cve,bei,verdict,analysed,scanner_severity,")
+    assert csv_lines[1].startswith("CVE-2021-44228,928.9,Contain,yes,CRITICAL,")
+    assert csv_lines[2].split(",")[3] == "no"
+    assert json.loads(to_json(items, {"assessed": 2}))["findings"][1]["analysed"] is False
+

@@ -267,9 +267,8 @@ Dependabot and SARIF. `vulnometry sweep` handles lockfiles and SBOMs: requiremen
 poetry.lock, package-lock.json, go.mod, Gemfile.lock, Cargo.lock, pom.xml, CycloneDX and SPDX.
 
 The workbook it writes has these sheets: Findings (every finding, colour-coded, filterable,
-frozen header, with a plain-language Rationale column), Manual review (every export row with no
-verdict of its own: not analysed, no CVE), To fix (Contain, Remediate and Schedule by due
-date), Duplicates (rows merged into another row's finding, side by side), Action Plan (Contain and Remediate, sorted by due date), Accepted
+frozen header, one row per export row with its judgment and a plain-language Rationale column),
+Manual review (rows judged Not analysed), To fix (Fix and Schedule by due date), Action Plan (Contain and Remediate, sorted by due date), Accepted
 (analysed findings below the action threshold, with the rationale, the EPSS score and its date,
 internet exposure, evidence gaps, model version and timestamp, plus blank columns for who
 accepted it, the review-by date and what should reopen it), By Owner (workload per team), and
@@ -282,20 +281,16 @@ as licence issues and scanner-only advisories, can't be scored. They are not dro
 the Manual review sheet and `summary.not_scored` in JSON list each one with its scanner severity,
 so the report still accounts for every row in the export.
 
-The Manual review sheet lists every row of the export that has no verdict of its own, one row
-each: findings that could not be analysed, duplicate rows merged into another finding, and rows
-with no CVE. Its count table reconciles to the export's row count. The To fix sheet lists what
-needs fixing, by due date. Rows the scanner listed twice for the same CVE on the same project
-are on a Duplicates sheet beside the row they were merged into. Every list carries the
-scanner's project, target, project link and issue link.
+Findings has one row per row of the export: nothing is merged, so the row count matches the
+file you were given. Each row is judged Fix, Schedule, Accept or Not analysed (no inventory
+match, or no CVE) and keeps the scanner's severity, issue ID, project, target and links. Manual
+review, To fix and Accepted are filters of it.
 
 When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
-verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result. The
-Method sheet reconciles the rows in the export to the findings, and a Scanner rows column says
-how many duplicate rows each finding merges.
+verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result.
 
 When a finding matches no asset in your inventory it is still scored (pessimistically) and
-still actionable: every report keeps the name the scanner gave it — a Scanner ref column in the
+still actionable: every report keeps the name the scanner gave it — the Project and Target columns in the
 workbook, and a `~name` fallback everywhere else — so you always know which project or host to
 go and look at.
 

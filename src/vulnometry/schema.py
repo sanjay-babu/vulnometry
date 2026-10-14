@@ -247,6 +247,8 @@ class Assessment(Serialisable):
     duplicate_rows: list[dict] = field(default_factory=list)  # further export rows merged into it
     source_url: str = ""  # the scanner's link to the project
     issue_url: str = ""  # the scanner's link to this issue
+    issue_id: str = ""  # the scanner's identifier for this issue
+    source_title: str = ""  # the scanner's title for this issue
 
     directive: str = ""
     gaps: list[str] = field(default_factory=list)
