@@ -246,11 +246,15 @@ def test_scanner_severity_is_carried_into_every_output(tmp_path):
     items[0].scanner_severity = "CRITICAL"
     items[1].scanner_severity = "moderate"
     items[1].asset = ""
+    items[1].source_asset = "legacy-batch-job"
     sheet = load_workbook(build_workbook(items, tmp_path / "out.xlsx", None))["Findings"]
     header = [c.value for c in sheet[4]]
     rows = [{header[i]: sheet.cell(row=r, column=i + 1).value for i in range(len(header))} for r in (5, 6)]
     assert [r["Scanner severity"] for r in rows] == ["Critical", "Medium"]
-    assert [r["Match"] for r in rows] == ["inventory", "scanner-ref only"]
+    assert [r["Analysis"] for r in rows] == ["Analysed", "Not analysed"]
+    assert rows[1]["Rationale"].startswith("Not analysed: 'legacy-batch-job' matched no asset")
+    assert "worst-case" in rows[1]["Rationale"]
+    assert not rows[0]["Rationale"].startswith("Not analysed")
     assert header.index("Rationale") == len(header) - 2, "free-text columns stay last"
 
     csv_lines = to_csv(items).splitlines()
@@ -277,6 +281,8 @@ def test_rows_the_model_could_not_score_get_their_own_sheet(tmp_path):
     sheet = workbook["Not scored"]
     assert [c.value for c in sheet[5]][:2] == ["High", "api"], "worst first"
     assert sheet.cell(row=6, column=5).value == "MIT licence"
+    assert sheet.cell(row=5, column=6).value == "Not analysed"
+    assert "No CVE identifier" in sheet.cell(row=5, column=7).value
     method = " ".join(str(c.value) for row in workbook["Method"].iter_rows() for c in row if c.value)
     assert "2 row(s) not scored" in method
     assert json.loads(to_json(_sample(), summary))["summary"]["not_scored"]["count"] == 2

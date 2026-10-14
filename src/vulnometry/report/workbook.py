@@ -33,7 +33,7 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 FINDINGS_COLUMNS = [
     ("CVE", 16), ("BEI", 8), ("Verdict", 12), ("Scanner severity", 11), ("Asset", 22),
-    ("Scanner ref", 24), ("Match", 15), ("Owner", 26),
+    ("Scanner ref", 24), ("Analysis", 15), ("Owner", 26),
     ("Business unit", 18), ("Environment", 13), ("Internet", 12), ("Due by", 12), ("SLA days", 9),
     ("Threat", 9), ("Reach", 9), ("Code path", 11), ("Consequence", 12),
     ("CVSS", 7), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 6), ("Ransomware", 11),
@@ -70,7 +70,7 @@ def _primary_driver(item: Assessment) -> str:
 
 
 ACCEPT_COLUMNS = [
-    ("CVE", 16), ("Location", 30), ("Match", 15), ("Package", 26), ("Scanner severity", 11),
+    ("CVE", 16), ("Location", 30), ("Analysis", 15), ("Package", 26), ("Scanner severity", 11),
     ("BEI", 7), ("Threat", 8), ("Reach", 8), ("Code path", 10), ("Conseq.", 9),
     ("Internet", 11), ("Tier", 6), ("Data class", 14),
     ("EPSS %", 9), ("EPSS date", 12), ("CISA KEV", 9), ("CVSS", 7),
@@ -107,7 +107,7 @@ def _accepted_sheet(workbook: Workbook, items: list[Assessment]) -> None:
         values = [
             item.cve_id,
             item.where() or "",
-            "inventory" if item.asset else "scanner-ref only",
+            "Analysed" if item.analysed() else "Not analysed",
             item.source_component or "",
             scanner_band(item.scanner_severity),
             item.exposure.index,
@@ -168,7 +168,7 @@ def _findings_sheet(workbook: Workbook, items: list[Assessment]) -> None:
             scanner_band(item.scanner_severity),
             item.asset or "",
             item.scanner_ref(),
-            "inventory" if item.asset else "scanner-ref only",
+            "Analysed" if item.analysed() else "Not analysed",
             item.owner or "",
             item.business_unit or "",
             item.environment or "",
@@ -243,7 +243,7 @@ def _action_sheet(workbook: Workbook, items: list[Assessment]) -> None:
 
 
 NOT_SCORED_COLUMNS = [
-    ("Scanner severity", 11), ("Asset", 30), ("Host", 26), ("Component", 22), ("Title", 50), ("Why not scored", 24),
+    ("Scanner severity", 11), ("Asset", 30), ("Host", 26), ("Component", 22), ("Title", 50), ("Analysis", 14), ("Why", 50),
 ]
 
 
@@ -268,11 +268,13 @@ def _not_scored_sheet(workbook: Workbook, not_scored: dict) -> None:
     for offset, item in enumerate(ordered):
         row = header_row + 1 + offset
         values = [item.get("scanner_severity", ""), item.get("asset", ""), item.get("host", ""),
-                  item.get("component", ""), item.get("title", ""), item.get("reason", "")]
+                  item.get("component", ""), item.get("title", ""), "Not analysed",
+                  f"No CVE identifier ({item.get('reason', '')}): exposure is scored per CVE, so only "
+                  "the scanner's severity applies. Licence findings land here too."]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=column == 5)
+            cell.alignment = Alignment(vertical="top", wrap_text=column in (5, 7))
 
     _widths(sheet, NOT_SCORED_COLUMNS)
     sheet.freeze_panes = sheet.cell(row=header_row + 1, column=1)

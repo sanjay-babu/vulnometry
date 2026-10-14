@@ -264,8 +264,20 @@ class Assessment(Serialisable):
             return "internal-only"
         return "exposure unknown"
 
+    def analysed(self) -> bool:
+        """False when the scan named a location that matched nothing in the inventory, so the
+        verdict was reached without business context (worst-case defaults)."""
+        return bool(self.asset) or not self.scanner_ref()
+
     def rationale(self) -> str:
         """One-sentence audit rationale: what drove the verdict, plus the context it was judged in."""
+        if not self.analysed():
+            return (f"Not analysed: '{self.scanner_ref()}' matched no asset in the inventory, so its "
+                    "exposure, tier and data class are unknown and it was scored worst-case. "
+                    f"Treat the verdict as provisional; map it to an asset for a real one. {self._rationale()}")
+        return self._rationale()
+
+    def _rationale(self) -> str:
         e = self.exposure
         if e.collapsed_by == "not-deployed":
             return f"{e.verdict}: the affected component is not deployed on this asset, so nothing is exposed here."
