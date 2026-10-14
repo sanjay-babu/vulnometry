@@ -286,7 +286,9 @@ def directive_for(
         parts.append(f"Target date {due_by}.")
     if exploitation.confirmed and exploitation.federal_deadline:
         parts.append(f"CISA deadline for federal agencies was {exploitation.federal_deadline}.")
-    if fixes:
+    if fixes and measure.verdict == "Accept":
+        parts.append(f"A fix exists ({', '.join(fixes[:3])}); take it with routine dependency upgrades.")
+    elif fixes:
         parts.append(f"Upgrade to {', '.join(fixes[:3])}.")
     elif scanner_fixability and measure.verdict in ("Contain", "Remediate", "Schedule"):
         parts.append(f"Scanner fixability: {scanner_fixability}; see the scanner issue for the fixed version.")

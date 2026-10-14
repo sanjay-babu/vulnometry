@@ -79,7 +79,7 @@ async def prime_all():
         ("GET", adv.GH_ADVISORY, {"cve_id": "CVE-2021-44228", "per_page": 10}, None, fx.GHSA_LOG4SHELL),
         ("GET", adv.GH_ADVISORY, {"cve_id": "CVE-2023-40000", "per_page": 10}, None, []),
         ("GET", adv.GH_SEARCH,
-         {"q": "CVE-2021-44228 in:name,description,readme", "sort": "stars", "per_page": 20},
+         {"q": "CVE-2021-44228 in:name,description", "sort": "stars", "per_page": 30},
          None, fx.GITHUB_REPOS),
     ])
 
@@ -113,6 +113,7 @@ def test_aggregator_repositories_are_filtered_out():
     labels = [a.label for a in artifacts]
     assert "redteam/log4shell-rce" in labels
     assert not any("PoC-in-GitHub" in label for label in labels)
+    assert "acme/payments-sdk" not in labels, "a project noting an upgrade is not exploit material"
     assert artifacts[0].maturity == "weaponised", "a metasploit module is not a bare PoC"
 
 
@@ -490,3 +491,14 @@ def test_a_failed_exploit_search_is_a_gap_not_an_empty_result(monkeypatch):
     monkeypatch.setattr(advisories, "client", lambda: Failing())
     with pytest.raises(FeedError):
         asyncio.run(advisories.exploit_artifacts("CVE-2021-44228"))
+
+
+def test_a_readme_mention_is_not_an_exploit():
+    from vulnometry.feeds.advisories import _looks_like_an_exploit
+
+    cve = "CVE-2021-44228"
+    assert _looks_like_an_exploit(cve, "someone/CVE-2021-44228-poc", "")
+    assert _looks_like_an_exploit(cve, "someone/log4shell-lab", "PoC exploit for CVE-2021-44228 (Log4Shell)")
+    assert not _looks_like_an_exploit(cve, "Azure/kafka-sink-azure-kusto", "Kafka sink for Azure Data Explorer")
+    assert not _looks_like_an_exploit(cve, "acme/api-sdk", "SDK. Bumped log4j to fix CVE-2021-44228"), \
+        "a project recording an upgrade is not exploit material"

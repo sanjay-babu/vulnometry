@@ -574,3 +574,23 @@ def test_devsecops_gets_only_what_is_safe_to_suppress(tmp_path):
     fix = _table(workbook["Engineering - fix"], ["Export row", "Fixed in", "Due by"])
     assert fix == [{"Export row": 6, "Fixed in": "axios 1.15.1", "Due by": "2027-02-11"}], \
         "accepted rows, suppressed or kept open, are not engineering's"
+
+
+def test_rationale_keeps_names_as_written():
+    item = Assessment(cve_id="CVE-2026-5002", asset="bridger Search", internet_exposed=False,
+                      exposure=ExposureMeasure(index=60, verdict="Accept", threat=0.5, reachability=0.1,
+                                               consequence=0.8, confidence="high",
+                                               reachability_basis=["Attack vector is network",
+                                                                   "Bridger Search is not internet-reachable"]))
+    assert "— Bridger Search is not internet-reachable." in item.rationale()
+
+
+def test_an_accept_mentions_its_fix_without_demanding_it():
+    from vulnometry.exposure import directive_for
+    from vulnometry.inventory import AssetProfile
+
+    text = directive_for(ExposureMeasure(index=80, verdict="Accept"), ConfirmedExploitation(cve_id="x"),
+                         ["js-yaml 4.2.0"], AssetProfile(name="api"))
+    assert text.startswith("No action warranted.")
+    assert "A fix exists (js-yaml 4.2.0); take it with routine dependency upgrades." in text
+    assert "Upgrade to" not in text

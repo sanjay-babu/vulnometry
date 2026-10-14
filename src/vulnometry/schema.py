@@ -397,6 +397,10 @@ def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
     return found[:limit]
 
 
+_LOWER_FIRST = ("Scanner's", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ",
+                "Public", "Holds", "In scope", "Production", "Development")
+
+
 def _sentence(line: str) -> str:
-    return line[0].lower() + line[1:] if line[:2] != "CV" and line[:4] != "EPSS" and line[:1].isupper() \
-        and not line.split()[0].isupper() else line
+    """Lower-case the first letter of evidence phrases ('Scanner's ...'), never of a name that starts a line."""
+    return line[0].lower() + line[1:] if line.startswith(_LOWER_FIRST) else line

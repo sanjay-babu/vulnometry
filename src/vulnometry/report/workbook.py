@@ -398,7 +398,7 @@ def _sources(items: list[Assessment]) -> str:
     if lens in ("full", "forensic"):
         used += ", OSV.dev and GitHub Security Advisories (fixed versions)"
     if lens == "forensic":
-        used += ", GitHub code search (exploit material)"
+        used += ", GitHub repository search (exploit material)"
     note = ("" if lens != "signal" else
             " This run used the 'signal' lens, which does not look up fixed versions; where the scanner reports "
             "fixability it is shown in 'Scanner fixability'.")

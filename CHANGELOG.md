@@ -87,6 +87,13 @@ Exposure model `bei-1.1`.
 
 ### Fixed
 
+- The GitHub exploit search matched any repository whose README mentioned the CVE, which is
+  mostly projects recording a dependency upgrade: on a real Snyk export, 65 of 78 CVEs came back
+  with "public exploit material", raising Threat and pushing findings up a verdict on the strength
+  of a changelog. A repository now counts only when its name carries the CVE ID, or its
+  description names the CVE and describes exploit material (exploit, PoC, payload, RCE, ...).
+- An Accept's directive said "Upgrade to ..." after "No action warranted". It now says a fix
+  exists and can be taken with routine dependency upgrades.
 - GitHub's search API allows 30 requests a minute; searches were paced like the rest of the API
   (60 a minute), and the 403 GitHub sends when a limit is hit was not retried. Most exploit
   searches on a large run were refused, and a refused search returned "nothing found": a false
