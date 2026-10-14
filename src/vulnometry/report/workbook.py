@@ -18,6 +18,25 @@ VERDICT_FILL = {
     "Schedule": PatternFill("solid", fgColor="F1C40F"),
     "Accept": PatternFill("solid", fgColor="BDC3C7"),
 }
+NOT_ANALYSED = "Not analysed"
+NOT_ANALYSED_FILL = PatternFill("solid", fgColor="D6EAF8")
+NOT_ANALYSED_FONT = Font(color="1B4F72", bold=True)
+
+
+def _verdict_label(item: Assessment) -> str:
+    """The verdict to show. A finding judged without business context has none worth acting on."""
+    return item.exposure.verdict if item.analysed() else NOT_ANALYSED
+
+
+def _paint_verdict(cell, item: Assessment) -> None:
+    if item.analysed():
+        cell.fill = VERDICT_FILL.get(item.exposure.verdict, VERDICT_FILL["Accept"])
+        cell.font = VERDICT_FONT.get(item.exposure.verdict, VERDICT_FONT["Accept"])
+    else:
+        cell.fill = NOT_ANALYSED_FILL
+        cell.font = NOT_ANALYSED_FONT
+
+
 VERDICT_FONT = {
     "Contain": Font(color="FFFFFF", bold=True),
     "Remediate": Font(color="FFFFFF", bold=True),
@@ -33,13 +52,15 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 FINDINGS_COLUMNS = [
     ("CVE", 16), ("BEI", 8), ("Verdict", 12), ("Scanner severity", 11), ("Asset", 22),
-    ("Scanner ref", 24), ("Analysis", 15), ("Owner", 26),
+    ("Scanner ref", 24), ("Analysis", 15), ("Scanner rows", 9), ("Owner", 26),
     ("Business unit", 18), ("Environment", 13), ("Internet", 12), ("Due by", 12), ("SLA days", 9),
     ("Threat", 9), ("Reach", 9), ("Code path", 11), ("Consequence", 12),
     ("CVSS", 7), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 6), ("Ransomware", 11),
     ("Component", 22), ("Fixed in", 28), ("Confidence", 11),
     ("Rationale", 90), ("Directive", 60),
 ]
+
+_RATIONALE_COLUMN = [name for name, _ in FINDINGS_COLUMNS].index("Rationale") + 1
 
 _CODE_PATH_SHORT = {"reachable": "Reachable", "unreachable": "No path"}
 
@@ -86,14 +107,18 @@ REOPEN_DEFAULT = ("EPSS >= 0.10  |  added to CISA KEV  |  a working public explo
 
 
 def _accepted_sheet(workbook: Workbook, items: list[Assessment]) -> None:
-    accepted = [i for i in items if i.exposure.verdict == "Accept"]
+    accepted = [i for i in items if i.exposure.verdict == "Accept" and i.analysed()]
+    held_back = sum(1 for i in items if i.exposure.verdict == "Accept" and not i.analysed())
     sheet = workbook.create_sheet("Accepted")
 
     sheet.cell(row=1, column=1, value="Accepted risk — rationale and sign-off").font = TITLE_FONT
     sheet.cell(
         row=2, column=1,
         value=(f"{len(accepted)} finding(s) scored below the action threshold. The rationale columns are "
-               "produced by the model; fill the Decision..Ticket columns and keep this as the audit record."),
+               "produced by the model; fill the Decision..Ticket columns and keep this as the audit record."
+               + (f" {held_back} more scored Accept only on worst-case defaults (Not analysed: no inventory "
+                  "match) and are left off, so they cannot be signed off or suppressed by mistake."
+                  if held_back else "")),
     ).font = Font(color="7F8C8D", size=10)
 
     header_row = 4
@@ -164,11 +189,12 @@ def _findings_sheet(workbook: Workbook, items: list[Assessment]) -> None:
         values = [
             item.cve_id,
             item.exposure.index,
-            item.exposure.verdict,
+            _verdict_label(item),
             scanner_band(item.scanner_severity),
             item.asset or "",
             item.scanner_ref(),
-            "Analysed" if item.analysed() else "Not analysed",
+            "Analysed" if item.analysed() else NOT_ANALYSED,
+            item.source_rows or 1,
             item.owner or "",
             item.business_unit or "",
             item.environment or "",
@@ -193,11 +219,10 @@ def _findings_sheet(workbook: Workbook, items: list[Assessment]) -> None:
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=column >= 26)
+            cell.alignment = Alignment(vertical="top", wrap_text=column >= _RATIONALE_COLUMN)
 
         verdict_cell = sheet.cell(row=row, column=3)
-        verdict_cell.fill = VERDICT_FILL.get(item.exposure.verdict, VERDICT_FILL["Accept"])
-        verdict_cell.font = VERDICT_FONT.get(item.exposure.verdict, VERDICT_FONT["Accept"])
+        _paint_verdict(verdict_cell, item)
         verdict_cell.alignment = Alignment(horizontal="center", vertical="center")
         sheet.cell(row=row, column=2).font = Font(bold=True)
 
@@ -226,7 +251,7 @@ def _action_sheet(workbook: Workbook, items: list[Assessment]) -> None:
     for offset, item in enumerate(ordered):
         row = header_row + 1 + offset
         for column, value in enumerate(
-            [item.due_by or "unscheduled", item.cve_id, item.exposure.verdict,
+            [item.due_by or "unscheduled", item.cve_id, _verdict_label(item),
              scanner_band(item.scanner_severity),
              item.where() or "unattributed", item.owner or "unassigned", item.directive],
             start=1,
@@ -234,9 +259,7 @@ def _action_sheet(workbook: Workbook, items: list[Assessment]) -> None:
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top", wrap_text=column == 7)
-        cell = sheet.cell(row=row, column=3)
-        cell.fill = VERDICT_FILL.get(item.exposure.verdict, VERDICT_FILL["Accept"])
-        cell.font = VERDICT_FONT.get(item.exposure.verdict, VERDICT_FONT["Accept"])
+        _paint_verdict(sheet.cell(row=row, column=3), item)
 
     _widths(sheet, columns)
     sheet.freeze_panes = sheet.cell(row=header_row + 1, column=1)
@@ -365,6 +388,30 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
                                 + (f" · {summary['not_scored']['count']} row(s) not scored (no CVE identifier; "
                                    "see 'Not scored')" if summary.get("not_scored") else "")),
         ]
+        if summary.get("not_analysed"):
+            rows.append(("Not analysed",
+                         f"{summary['not_analysed']} finding(s) name a project or host that matched nothing in the "
+                         "inventory. They are scored on worst-case defaults, but the Verdict column says "
+                         "'Not analysed' instead of that provisional result, and none of them appear on the "
+                         "Accepted sheet. Map them to an asset to get a real verdict."))
+        intake = summary.get("intake")
+        if intake:
+            rows += [
+                ("", ""),
+                ("Every row accounted for",
+                 "How the rows in the scanner export become the findings in this workbook."
+                 + (" This run was limited (--limit), so only part of the export was scored."
+                    if intake.get("limited") else "")),
+                ("  Rows in the export", intake["export_rows"]),
+                ("  No CVE identifier", f"{intake['rows_without_cve']}  (Not scored sheet)"),
+                ("  With a CVE", f"{intake['rows_with_cve']}  ({intake['cve_entries']} CVE entries: a row "
+                                 "listing several CVEs counts once per CVE)"),
+                ("  Merged duplicates",
+                 f"{intake['merged_duplicates']}  (the same CVE on the same project and host, listed more "
+                 "than once by the scanner, e.g. once per dependency path. 'Scanner rows' on Findings "
+                 "says how many each finding stands for)"),
+                ("  Findings", intake["findings"]),
+            ]
         reduction = summary.get("reduction") or {}
         if reduction.get("findings_assessed"):
             r = reduction

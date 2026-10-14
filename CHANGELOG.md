@@ -38,6 +38,16 @@ Exposure model `bei-1.1`.
   environment. Unmatched findings use it too. Without the block nothing changes. The
   workbook's Method sheet states the policy that was applied.
 
+- A finding that matched no inventory asset shows `Not analysed` in the Verdict column of the
+  workbook instead of its worst-case result, and is left off the Accepted sheet, so it cannot be
+  signed off or suppressed by mistake. The rationale still gives the provisional result. JSON
+  findings carry `analysed`, CSV an `analysed` column, and the summary `not_analysed` and
+  `by_verdict_analysed`.
+- Every row of a spreadsheet export is accounted for. Findings has a Scanner rows column (how
+  many export rows a finding stands for, after duplicates of the same CVE on the same project
+  are merged), and the Method sheet reconciles rows in the export to findings
+  (`summary.intake` in JSON).
+
 ### Changed
 
 - `MODEL_VERSION` is `bei-1.1`. Findings without call-graph data score exactly as

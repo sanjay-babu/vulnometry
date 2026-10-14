@@ -200,6 +200,26 @@ def test_portfolio_summary_attributes_work():
     assert summary["exposure_by_business_unit"]["Commerce"] > 0
 
 
+def test_duplicate_rows_are_merged_and_counted():
+    async def run():
+        await prime_all()
+        return await assess_portfolio([
+            {"cve": "CVE-2021-44228", "asset": "checkout-api"},
+            {"cve": "CVE-2021-44228", "asset": "checkout-api"},
+            {"cve": "CVE-2021-44228", "asset": "checkout-api"},
+            {"cve": "CVE-2023-40000", "asset": "nowhere-known"},
+        ], inventory=INVENTORY, lens="signal")
+
+    results = asyncio.run(run())
+    rows = {r.cve_id: r for r in results}
+    assert len(results) == 2
+    assert rows["CVE-2021-44228"].source_rows == 3
+    assert rows["CVE-2023-40000"].source_rows == 1
+    summary = portfolio_summary(results)
+    assert summary["not_analysed"] == 1
+    assert sum(summary["by_verdict_analysed"].values()) == 1, "only the matched finding has a verdict"
+
+
 def test_reduction_funnel_counts_upgrades_not_rows():
     """One package on one asset is one upgrade, however many CVEs it carries."""
     async def run():

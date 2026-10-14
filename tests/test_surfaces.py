@@ -258,8 +258,9 @@ def test_scanner_severity_is_carried_into_every_output(tmp_path):
     assert header.index("Rationale") == len(header) - 2, "free-text columns stay last"
 
     csv_lines = to_csv(items).splitlines()
-    assert csv_lines[0].startswith("cve,bei,verdict,scanner_severity,")
-    assert csv_lines[1].startswith("CVE-2021-44228,928.9,Contain,CRITICAL,")
+    assert csv_lines[0].startswith("cve,bei,verdict,analysed,scanner_severity,")
+    assert csv_lines[1].startswith("CVE-2021-44228,928.9,Contain,yes,CRITICAL,")
+    assert csv_lines[2].split(",")[3] == "no"
 
 
 def test_rows_the_model_could_not_score_get_their_own_sheet(tmp_path):
@@ -350,3 +351,41 @@ def test_the_package_version_matches_pyproject():
     declared = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
     assert declared, "pyproject.toml has no top-level version"
     assert vulnometry.__version__ == declared.group(1)
+
+
+def test_not_analysed_findings_show_no_verdict_and_are_never_accepted(tmp_path):
+    from openpyxl import load_workbook
+
+    items = _sample()
+    items.append(Assessment(cve_id="CVE-2024-1111", source_asset="orphan-service", source_rows=3,
+                            exposure=ExposureMeasure(index=40.0, verdict="Accept", threat=0.1,
+                                                     reachability=0.5, consequence=0.5)))
+    summary = {"assessed": 3, "actionable": 1, "suppressed_by_context": 1, "unattributed": 1,
+               "not_analysed": 1,
+               "intake": {"export_rows": 6, "rows_without_cve": 1, "rows_with_cve": 5, "cve_entries": 5,
+                          "scored_entries": 5, "findings": 3, "merged_duplicates": 2, "limited": False}}
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+
+    findings = workbook["Findings"]
+    header = [c.value for c in findings[4]]
+    rows = {findings.cell(row=r, column=1).value:
+            {header[i]: findings.cell(row=r, column=i + 1).value for i in range(len(header))}
+            for r in range(5, 8)}
+    orphan = rows["CVE-2024-1111"]
+    assert orphan["Verdict"] == "Not analysed", "a worst-case Accept must not read as Accept"
+    assert orphan["Analysis"] == "Not analysed"
+    assert orphan["Scanner rows"] == 3
+    assert "Do not accept or suppress it" in orphan["Rationale"]
+    assert rows["CVE-2021-44228"]["Verdict"] == "Contain"
+
+    accepted = workbook["Accepted"]
+    listed = [accepted.cell(row=r, column=1).value for r in range(5, accepted.max_row + 1)]
+    assert "CVE-2024-1111" not in listed
+    assert "1 more scored Accept only on worst-case defaults" in accepted.cell(row=2, column=1).value
+
+    method = {str(r[0].value).strip(): r[1].value for r in workbook["Method"].iter_rows() if r[0].value}
+    assert method["Rows in the export"] == 6
+    assert method["Findings"] == 3
+    assert method["Merged duplicates"].startswith("2 ")
+    assert "Not analysed" in method
+    assert json.loads(to_json(items, summary))["findings"][2]["analysed"] is False

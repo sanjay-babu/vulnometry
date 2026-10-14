@@ -281,6 +281,11 @@ as licence issues and scanner-only advisories, can't be scored. They are not dro
 the Not scored sheet and `summary.not_scored` in JSON list each one with its scanner severity,
 so the report still accounts for every row in the export.
 
+When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
+verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result. The
+Method sheet reconciles the rows in the export to the findings, and a Scanner rows column says
+how many duplicate rows each finding merges.
+
 When a finding matches no asset in your inventory it is still scored (pessimistically) and
 still actionable: every report keeps the name the scanner gave it — a Scanner ref column in the
 workbook, and a `~name` fallback everywhere else — so you always know which project or host to

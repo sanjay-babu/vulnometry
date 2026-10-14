@@ -242,6 +242,7 @@ class Assessment(Serialisable):
     # the scanner's own call-graph verdict for this finding: "reachable",
     # "unreachable" or "" (not analysed). Feeds the Reachability factor.
     code_reachability: str = ""
+    source_rows: int = 0  # how many rows of the scanner export this finding stands for
 
     directive: str = ""
     gaps: list[str] = field(default_factory=list)
@@ -264,6 +265,11 @@ class Assessment(Serialisable):
             return "internal-only"
         return "exposure unknown"
 
+    def to_dict(self, prune: bool = True) -> dict:
+        data = super().to_dict(prune)
+        data["analysed"] = self.analysed()
+        return data
+
     def analysed(self) -> bool:
         """False when the scan named a location that matched nothing in the inventory, so the
         verdict was reached without business context (worst-case defaults)."""
@@ -273,8 +279,9 @@ class Assessment(Serialisable):
         """One-sentence audit rationale: what drove the verdict, plus the context it was judged in."""
         if not self.analysed():
             return (f"Not analysed: '{self.scanner_ref()}' matched no asset in the inventory, so its "
-                    "exposure, tier and data class are unknown and it was scored worst-case. "
-                    f"Treat the verdict as provisional; map it to an asset for a real one. {self._rationale()}")
+                    "exposure, tier and data class are unknown. Do not accept or suppress it on this basis; "
+                    "map it to an asset for a real verdict. Provisional result on worst-case defaults: "
+                    f"{self._rationale()}")
         return self._rationale()
 
     def _rationale(self) -> str:
