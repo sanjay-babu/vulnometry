@@ -281,9 +281,10 @@ as licence issues and scanner-only advisories, can't be scored. They are not dro
 the Not scored sheet and `summary.not_scored` in JSON list each one with its scanner severity,
 so the report still accounts for every row in the export.
 
-The Review & Fix sheet puts everything that is not an accepted risk on one list: findings to
-fix, findings that could not be analysed, and rows that could not be scored. Filter it and
-hand it over.
+The Manual review sheet lists every row of the export that has no verdict of its own, one row
+each: findings that could not be analysed, duplicate rows merged into another finding, and rows
+with no CVE. Its count table reconciles to the export's row count. The To fix sheet lists what
+needs fixing, by due date.
 
 When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
 verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result. The

@@ -270,11 +270,11 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "environment": _cell(row, mapping.get("environment")),
             "source": path.name,
             "row": sheet_row,
+            "title": _cell(row, mapping.get("title")),
         }
         if not cve_ids:
             if unscored is not None:
-                unscored.append({**base, "title": _cell(row, mapping.get("title")),
-                                 "reason": "no CVE identifier"})
+                unscored.append({**base, "reason": "no CVE identifier"})
             continue
         for cve in cve_ids:
             findings.append({**base, "cve": cve})

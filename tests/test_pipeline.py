@@ -215,6 +215,7 @@ def test_duplicate_rows_are_merged_and_counted():
     assert len(results) == 2
     assert rows["CVE-2021-44228"].source_rows == 3
     assert rows["CVE-2023-40000"].source_rows == 1
+    assert len(rows["CVE-2021-44228"].duplicate_rows) == 2
     summary = portfolio_summary(results)
     assert summary["not_analysed"] == 1
     assert sum(summary["by_verdict_analysed"].values()) == 1, "only the matched finding has a verdict"

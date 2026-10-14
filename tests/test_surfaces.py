@@ -193,7 +193,8 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
     path = build_workbook(_sample(), tmp_path / "out.xlsx",
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
-    assert workbook.sheetnames == ["Findings", "Review & Fix", "Action Plan", "Accepted", "By Owner", "Method"]
+    assert workbook.sheetnames == ["Findings", "Manual review", "To fix", "Action Plan", "Accepted",
+                                   "By Owner", "Method"]
 
     findings = workbook["Findings"]
     assert findings.freeze_panes == "B5"
@@ -263,7 +264,7 @@ def test_scanner_severity_is_carried_into_every_output(tmp_path):
     assert csv_lines[2].split(",")[3] == "no"
 
 
-def test_rows_the_model_could_not_score_get_their_own_sheet(tmp_path):
+def test_rows_the_model_could_not_score_are_summarised(tmp_path):
     from openpyxl import load_workbook
 
     from vulnometry.assessment import not_scored_summary
@@ -278,12 +279,7 @@ def test_rows_the_model_could_not_score_get_their_own_sheet(tmp_path):
     summary = {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0,
                "not_scored": not_scored}
     workbook = load_workbook(build_workbook(_sample(), tmp_path / "out.xlsx", summary))
-    assert "Not scored" in workbook.sheetnames
-    sheet = workbook["Not scored"]
-    assert [c.value for c in sheet[5]][:2] == ["High", "api"], "worst first"
-    assert sheet.cell(row=6, column=5).value == "MIT licence"
-    assert sheet.cell(row=5, column=6).value == "Not analysed"
-    assert "No CVE identifier" in sheet.cell(row=5, column=7).value
+    assert "Not scored" not in workbook.sheetnames, "they live on Manual review"
     method = " ".join(str(c.value) for row in workbook["Method"].iter_rows() for c in row if c.value)
     assert "2 row(s) not scored" in method
     assert json.loads(to_json(_sample(), summary))["summary"]["not_scored"]["count"] == 2
@@ -391,41 +387,54 @@ def test_not_analysed_findings_show_no_verdict_and_are_never_accepted(tmp_path):
     assert json.loads(to_json(items, summary))["findings"][2]["analysed"] is False
 
 
-def test_review_and_fix_lists_everything_that_is_not_an_accepted_risk(tmp_path):
+def _list_on(sheet, columns):
+    header_row = next(r for r in range(1, 40) if sheet.cell(row=r, column=1).value == "Why on this list")
+    header = [c.value for c in sheet[header_row]]
+    return header_row, [[sheet.cell(row=r, column=header.index(c) + 1).value for c in columns]
+                        for r in range(header_row + 1, sheet.max_row + 1)]
+
+
+def test_manual_review_lists_every_row_without_a_verdict_of_its_own(tmp_path):
     from openpyxl import load_workbook
 
     from vulnometry.assessment import not_scored_summary
 
     items = [
         Assessment(cve_id="CVE-1", asset="checkout-api", scanner_severity="High", due_by="2026-11-01",
+                   source_row=2, source_rows=3,
+                   duplicate_rows=[{"row": 7, "scanner_severity": "High", "title": "RCE"},
+                                   {"row": 9, "scanner_severity": "Critical", "title": "RCE"}],
                    exposure=ExposureMeasure(index=500, verdict="Remediate")),
         Assessment(cve_id="CVE-2", asset="checkout-api", scanner_severity="Medium", due_by="2027-01-01",
-                   exposure=ExposureMeasure(index=200, verdict="Schedule")),
-        Assessment(cve_id="CVE-3", asset="checkout-api", scanner_severity="Critical",
+                   source_row=3, exposure=ExposureMeasure(index=200, verdict="Schedule")),
+        Assessment(cve_id="CVE-3", asset="checkout-api", scanner_severity="Critical", source_row=4,
                    exposure=ExposureMeasure(index=50, verdict="Accept")),
-        Assessment(cve_id="CVE-4", source_asset="orphan", scanner_severity="Critical",
+        Assessment(cve_id="CVE-4", source_asset="orphan", scanner_severity="Critical", source_row=5,
                    exposure=ExposureMeasure(index=60, verdict="Accept")),
     ]
-    not_scored = not_scored_summary([{"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license"}])
-    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx",
-                                             {"assessed": 4, "actionable": 1, "suppressed_by_context": 0,
-                                              "unattributed": 1, "not_scored": not_scored}))
-    sheet = workbook["Review & Fix"]
+    not_scored = not_scored_summary([{"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license",
+                                      "row": 6}])
+    summary = {"assessed": 4, "actionable": 1, "suppressed_by_context": 0, "unattributed": 1,
+               "not_scored": not_scored}
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
 
-    table = {sheet.cell(row=r, column=1).value: [sheet.cell(row=r, column=c).value for c in range(2, 8)]
-             for r in range(5, 11)}
-    assert table["Remediate"][-1] == 1 and table["Schedule"][-1] == 1
-    assert table["Not analysed"] == [1, 0, 0, 0, 0, 1], "counted under its scanner severity"
-    assert table["Not scored (no CVE)"][3] == 1
-    assert table["Accepted (not on this list)"][-1] == 1
+    review = workbook["Manual review"]
+    table = {review.cell(row=r, column=1).value: review.cell(row=r, column=7).value for r in range(5, 13)}
+    assert table["Remediate"] == 1 and table["Schedule"] == 1 and table["Accept"] == 1
+    assert table["Not analysed (on this list)"] == 1
+    assert table["Duplicate rows (on this list)"] == 2
+    assert table["Not scored (on this list)"] == 1
+    assert table["Total"] == 7, "every export row: 4 findings + 2 duplicates + 1 not scored"
 
-    header_row = next(r for r in range(1, 30) if sheet.cell(row=r, column=1).value == "Why on this list")
-    listed = [[sheet.cell(row=r, column=c).value for c in (1, 3, 6)]
-              for r in range(header_row + 1, sheet.max_row + 1)]
+    _, listed = _list_on(review, ["Why on this list", "Scanner severity", "Verdict", "CVE", "Export row"])
     assert listed == [
-        ["Fix", "Remediate", "CVE-1"],
-        ["Fix", "Schedule", "CVE-2"],
-        ["Review: not analysed", "Not analysed", "CVE-4"],
-        ["Review: not scored (no CVE)", "Not analysed", None],
-    ], "the analysed Accept (CVE-3) is the only thing left off"
-    assert sheet.auto_filter.ref.startswith(f"A{header_row}:")
+        ["Not analysed", "Critical", "Not analysed", "CVE-4", 5],
+        ["Duplicate row", "Critical", "Remediate", "CVE-1", 9],
+        ["Duplicate row", "High", "Remediate", "CVE-1", 7],
+        ["Not scored (no CVE)", "Low", "Not analysed", None, 6],
+    ]
+    _, reasons = _list_on(review, ["Reason"])
+    assert "as export row 2" in reasons[1][0]
+
+    _, fix = _list_on(workbook["To fix"], ["Verdict", "CVE"])
+    assert fix == [["Remediate", "CVE-1"], ["Schedule", "CVE-2"]], "analysed Accepts and Not analysed stay off"

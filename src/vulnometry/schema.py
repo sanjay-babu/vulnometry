@@ -243,6 +243,8 @@ class Assessment(Serialisable):
     # "unreachable" or "" (not analysed). Feeds the Reachability factor.
     code_reachability: str = ""
     source_rows: int = 0  # how many rows of the scanner export this finding stands for
+    source_row: int = 0  # the export row it was scored from (1-based, as the sheet numbers it)
+    duplicate_rows: list[dict] = field(default_factory=list)  # further export rows merged into it
 
     directive: str = ""
     gaps: list[str] = field(default_factory=list)

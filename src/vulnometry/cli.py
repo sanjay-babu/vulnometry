@@ -210,7 +210,7 @@ async def cmd_import(args) -> int:
     ERR.print(f"Read [bold]{len(rows)}[/] finding(s) from {path.name}: {label}")
     if unscored:
         ERR.print(f"[yellow]{len(unscored)} row(s) carry no CVE identifier[/] and cannot be scored. "
-                  "They are listed, with the scanner's severity, as 'Not scored'.")
+                  "They are listed, with the scanner's severity, on 'Manual review'.")
 
     inventory = _load_inventory(args)
     if inventory.assets:
