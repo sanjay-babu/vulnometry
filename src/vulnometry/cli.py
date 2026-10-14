@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .assessment import assess_portfolio, not_scored_summary, portfolio_summary
+from .assessment import JUDGMENT_ORDER, assess_portfolio, export_rows, not_scored_summary, portfolio_summary
 from .config import settings
 from .inventory import TEMPLATE, AssetProfile, Inventory
 from .report import (
@@ -218,7 +218,7 @@ async def cmd_import(args) -> int:
     else:
         ERR.print("[yellow]No inventory loaded[/]. Everything will be scored with pessimistic defaults.")
 
-    export_rows = len({r["row"] for r in rows if "row" in r}) or len(rows)
+    rows_with_cve = len({r["row"] for r in rows if "row" in r}) or len(rows)
     cve_entries = len(rows)
     if args.limit:
         rows = rows[: args.limit]
@@ -230,18 +230,21 @@ async def cmd_import(args) -> int:
 
     summary = portfolio_summary(results)
     summary["sla_policy"] = inventory.sla.describe()
-    summary["intake"] = {
-        "export_rows": export_rows + len(unscored),
-        "rows_without_cve": len(unscored),
-        "rows_with_cve": export_rows,
-        "cve_entries": cve_entries,
-        "scored_entries": len(rows),
-        "findings": len(results),
-        "merged_duplicates": len(rows) - len(results),
-        "limited": bool(args.limit),
-    }
     if unscored:
         summary["not_scored"] = not_scored_summary(unscored)
+    records = export_rows(results, (summary.get("not_scored") or {}).get("rows"))
+    summary["by_judgment"] = {j: sum(1 for r in records if r["judgment"] == j) for j in JUDGMENT_ORDER}
+    summary["intake"] = {
+        "export_rows": rows_with_cve + len(unscored),
+        "rows_without_cve": len(unscored),
+        "rows_with_cve": rows_with_cve,
+        "cve_entries": cve_entries,
+        "rows_with_several_cves": cve_entries - rows_with_cve,
+        "scored_entries": len(rows),
+        "findings": len(results),
+        "rows_on_findings": len(records),
+        "limited": bool(args.limit),
+    }
     if args.min_index:
         results = [r for r in results if r.exposure.index >= args.min_index]
 

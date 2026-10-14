@@ -43,17 +43,20 @@ Exposure model `bei-1.1`.
   signed off or suppressed by mistake. The rationale still gives the provisional result. JSON
   findings carry `analysed`, CSV an `analysed` column, and the summary `not_analysed` and
   `by_verdict_analysed`.
-- A Manual review sheet lists, one row each, every export row with no verdict of its own:
-  findings that could not be analysed, duplicate rows (the same CVE on the same project, merged
-  into one finding and judged once; each shows its own export row and the row it was merged
-  into), and rows with no CVE. A table at the top counts every export row by verdict or reason
-  and scanner severity, so it reconciles to the export. It replaces the separate Not scored
-  sheet. A To fix sheet lists the analysed Contain, Remediate and Schedule findings by due date.
-  Findings record `source_row` and `duplicate_rows`.
-- Every row of a spreadsheet export is accounted for. Findings has a Scanner rows column (how
-  many export rows a finding stands for, after duplicates of the same CVE on the same project
-  are merged), and the Method sheet reconciles rows in the export to findings
-  (`summary.intake` in JSON).
+- **One row per scanner row.** Rows of a spreadsheet export are no longer merged: two scanner
+  issues that share a CVE and a project are two rows, each judged on its own. Findings has
+  exactly one row per export row, including rows with no CVE, and a count table at the top that
+  totals to the export. A row listing several CVEs is judged on the worst of them. Each row
+  carries a **Judgment**: Fix (Contain or Remediate), Schedule, Accept, or Not analysed (no
+  inventory match, or no CVE), with the reason. `export_rows()` builds these records; the JSON
+  summary carries `by_judgment` and `intake`.
+- Every list shows the scanner's Export row, Issue ID, Title, Project, Target, Project URL and
+  Issue URL (read from columns such as `PROJECT_URL`, `ISSUE_URL`, `PROBLEM_TITLE`; the issue ID
+  from an `ISSUE_ID`-style column or the issue link). Links are clickable. A row whose issue link
+  already appeared on an earlier row says so in *Duplicate of row*; it is still listed.
+- Manual review lists the Not analysed rows, To fix the Fix and Schedule rows by due date, and
+  Accepted the Accept rows with sign-off columns: all filters of Findings. The separate Not
+  scored sheet is gone; those rows are on Findings and Manual review.
 
 ### Changed
 
