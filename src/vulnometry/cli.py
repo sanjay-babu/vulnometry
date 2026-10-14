@@ -210,7 +210,7 @@ async def cmd_import(args) -> int:
     ERR.print(f"Read [bold]{len(rows)}[/] finding(s) from {path.name}: {label}")
     if unscored:
         ERR.print(f"[yellow]{len(unscored)} row(s) carry no CVE identifier[/] and cannot be scored. "
-                  "They are listed, with the scanner's severity, as 'Not scored'.")
+                  "They are listed, with the scanner's severity, on 'Manual review'.")
 
     inventory = _load_inventory(args)
     if inventory.assets:
@@ -218,6 +218,8 @@ async def cmd_import(args) -> int:
     else:
         ERR.print("[yellow]No inventory loaded[/]. Everything will be scored with pessimistic defaults.")
 
+    export_rows = len({r["row"] for r in rows if "row" in r}) or len(rows)
+    cve_entries = len(rows)
     if args.limit:
         rows = rows[: args.limit]
 
@@ -228,6 +230,16 @@ async def cmd_import(args) -> int:
 
     summary = portfolio_summary(results)
     summary["sla_policy"] = inventory.sla.describe()
+    summary["intake"] = {
+        "export_rows": export_rows + len(unscored),
+        "rows_without_cve": len(unscored),
+        "rows_with_cve": export_rows,
+        "cve_entries": cve_entries,
+        "scored_entries": len(rows),
+        "findings": len(results),
+        "merged_duplicates": len(rows) - len(results),
+        "limited": bool(args.limit),
+    }
     if unscored:
         summary["not_scored"] = not_scored_summary(unscored)
     if args.min_index:

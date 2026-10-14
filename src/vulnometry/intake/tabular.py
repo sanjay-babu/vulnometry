@@ -245,10 +245,11 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
     body = rows[header_index + 1 :]
 
     findings: list[dict] = []
-    for row in body:
+    for offset, row in enumerate(body):
         if not row or not any(row):
             continue
         row = list(row)
+        sheet_row = header_index + 2 + offset  # 1-based, as the spreadsheet numbers it
 
         if "cve" in mapping:
             raw = _cell(row, mapping["cve"])
@@ -268,11 +269,12 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "business_unit": _cell(row, mapping.get("business_unit")),
             "environment": _cell(row, mapping.get("environment")),
             "source": path.name,
+            "row": sheet_row,
+            "title": _cell(row, mapping.get("title")),
         }
         if not cve_ids:
             if unscored is not None:
-                unscored.append({**base, "title": _cell(row, mapping.get("title")),
-                                 "reason": "no CVE identifier"})
+                unscored.append({**base, "reason": "no CVE identifier"})
             continue
         for cve in cve_ids:
             findings.append({**base, "cve": cve})

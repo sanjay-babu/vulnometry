@@ -171,6 +171,12 @@ async def assess_portfolio(
         key = (cve, row.get("asset", ""), row.get("host", ""), row.get("component", ""))
         reach = canonical_code_reachability(row.get("code_reachability"))
         if key in seen:
+            seen[key]["_rows"] += 1
+            seen[key]["_duplicates"].append({
+                "row": row.get("row", 0), "scanner_severity": str(row.get("raw_severity") or "").strip(),
+                "code_reachability": str(row.get("code_reachability") or "").strip(),
+                "title": row.get("title", ""), "version": row.get("version", ""),
+            })
             # Duplicate rows can disagree. Keep the least favourable call-graph
             # verdict: one reachable path is enough, and "not analysed" beats
             # "unreachable" so a discount needs every row to agree.
@@ -180,6 +186,8 @@ async def assess_portfolio(
             continue
         row["cve"] = cve
         row["code_reachability"] = reach
+        row["_rows"] = 1
+        row["_duplicates"] = []
         seen[key] = row
         normalised.append(row)
 
@@ -201,6 +209,10 @@ async def assess_portfolio(
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))
+    for row, result in zip(normalised, results, strict=True):
+        result.source_rows = row["_rows"]
+        result.source_row = row.get("row", 0)
+        result.duplicate_rows = row["_duplicates"]
     return sorted(results, key=lambda a: a.exposure.index, reverse=True)
 
 
@@ -395,10 +407,18 @@ def not_scored_summary(rows: list[dict]) -> dict:
         "rows": [
             {"scanner_severity": scanner_band(r.get("raw_severity", "")), "asset": r.get("asset", ""),
              "host": r.get("host", ""), "component": r.get("component", ""),
-             "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier")}
+             "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier"),
+             "row": r.get("row", 0)}
             for r in rows
         ],
     }
+
+
+def _count_verdicts(items) -> dict:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item.exposure.verdict] = counts.get(item.exposure.verdict, 0) + 1
+    return counts
 
 
 def portfolio_summary(assessments: list[Assessment],
@@ -435,6 +455,8 @@ def portfolio_summary(assessments: list[Assessment],
         "load_by_owner": dict(sorted(by_owner.items(), key=lambda kv: -kv[1])),
         "exposure_by_business_unit": dict(sorted(by_unit.items(), key=lambda kv: -kv[1])),
         "unattributed": sum(1 for a in assessments if not a.asset),
+        "not_analysed": sum(1 for a in assessments if not a.analysed()),
+        "by_verdict_analysed": _count_verdicts(a for a in assessments if a.analysed()),
         "top": [
             {
                 "cve": a.cve_id,

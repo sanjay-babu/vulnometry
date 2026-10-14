@@ -29,7 +29,7 @@ Exposure model `bei-1.1`.
   `Assessment.analysed()` exposes the same test.
 - Rows in a spreadsheet or CSV export that carry no CVE identifier, such as licence issues and
   scanner-only advisories, are no longer dropped silently. `vulnometry import` says how many
-  there are and lists them on a new Not scored sheet with their scanner severity; JSON output
+  there are and lists them on the Manual review sheet with their scanner severity; JSON output
   carries them as `summary.not_scored`. `parse_tabular` and `load_findings` take an optional
   `unscored` list to collect them; callers that pass nothing see no change.
 
@@ -37,6 +37,23 @@ Exposure model `bei-1.1`.
   `scale: false` to give every asset the same window instead of scaling by tier, regime and
   environment. Unmatched findings use it too. Without the block nothing changes. The
   workbook's Method sheet states the policy that was applied.
+
+- A finding that matched no inventory asset shows `Not analysed` in the Verdict column of the
+  workbook instead of its worst-case result, and is left off the Accepted sheet, so it cannot be
+  signed off or suppressed by mistake. The rationale still gives the provisional result. JSON
+  findings carry `analysed`, CSV an `analysed` column, and the summary `not_analysed` and
+  `by_verdict_analysed`.
+- A Manual review sheet lists, one row each, every export row with no verdict of its own:
+  findings that could not be analysed, duplicate rows (the same CVE on the same project, merged
+  into one finding and judged once; each shows its own export row and the row it was merged
+  into), and rows with no CVE. A table at the top counts every export row by verdict or reason
+  and scanner severity, so it reconciles to the export. It replaces the separate Not scored
+  sheet. A To fix sheet lists the analysed Contain, Remediate and Schedule findings by due date.
+  Findings record `source_row` and `duplicate_rows`.
+- Every row of a spreadsheet export is accounted for. Findings has a Scanner rows column (how
+  many export rows a finding stands for, after duplicates of the same CVE on the same project
+  are merged), and the Method sheet reconciles rows in the export to findings
+  (`summary.intake` in JSON).
 
 ### Changed
 
