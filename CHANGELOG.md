@@ -29,7 +29,7 @@ Exposure model `bei-1.1`.
   `Assessment.analysed()` exposes the same test.
 - Rows in a spreadsheet or CSV export that carry no CVE identifier, such as licence issues and
   scanner-only advisories, are no longer dropped silently. `vulnometry import` says how many
-  there are and lists them on a new Not scored sheet with their scanner severity; JSON output
+  there are and lists them on the Manual review sheet with their scanner severity; JSON output
   carries them as `summary.not_scored`. `parse_tabular` and `load_findings` take an optional
   `unscored` list to collect them; callers that pass nothing see no change.
 
