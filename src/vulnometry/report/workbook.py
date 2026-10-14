@@ -269,8 +269,7 @@ def _not_scored_sheet(workbook: Workbook, not_scored: dict) -> None:
         row = header_row + 1 + offset
         values = [item.get("scanner_severity", ""), item.get("asset", ""), item.get("host", ""),
                   item.get("component", ""), item.get("title", ""), "Not analysed",
-                  f"No CVE identifier ({item.get('reason', '')}): exposure is scored per CVE, so only "
-                  "the scanner's severity applies. Licence findings land here too."]
+                  "No CVE identifier: exposure is scored per CVE, so only the scanner's severity applies."]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row=row, column=column, value=value)
             cell.border = BORDER
