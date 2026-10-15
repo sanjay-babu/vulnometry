@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from .config import settings
+from .evidence import run_date, run_timestamp
 from .exposure import directive_for, measure_exposure
 from .feeds import advisories as adv_feed
 from .feeds import catalogue as kev_feed
@@ -137,7 +138,7 @@ async def assess_finding(
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
     fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
-    due_by = asset.due_date(measure.verdict, policy=policy)
+    due_by = asset.due_date(measure.verdict, from_date=run_date(), policy=policy)
 
     return Assessment(
         cve_id=cve_id,
@@ -169,7 +170,7 @@ async def assess_finding(
         scanner_fixability=scanner_fixability,
         gaps=gaps,
         lens=lens,
-        measured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        measured_at=run_timestamp() or datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
 
 

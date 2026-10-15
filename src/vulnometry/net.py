@@ -229,7 +229,7 @@ class Client:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def request_json(
+    async def _request_live(
         self,
         method: str,
         url: str,
@@ -308,6 +308,25 @@ class Client:
             raise FeedError(source, f"HTTP {resp.status_code}: {resp.text[:200]}", resp.status_code)
 
         raise FeedError(source, f"gave up after {cfg.max_retries + 1} attempts ({last_error})")
+
+    async def request_json(self, method: str, url: str, *, source: str, params=None, json_body=None,
+                           **kw) -> Any:
+        """A feed request, answered from the run's evidence file when one is being replayed and
+        written to it when one is being recorded. A request that failed is not recorded, so a
+        replay reports the same gap."""
+        from .evidence import evidence
+
+        store = evidence()
+        key = _cache_key(method, url, params, json_body)
+        if store is not None and store.replaying:
+            found, payload = await store.get(key)
+            if not found:
+                raise FeedError(source, "not in the evidence file being replayed")
+            return payload
+        payload = await self._request_live(method, url, source=source, params=params, json_body=json_body, **kw)
+        if store is not None:
+            await store.put(key, source, payload)
+        return payload
 
     async def get_json(self, url: str, **kw) -> Any:
         return await self.request_json("GET", url, **kw)

@@ -53,6 +53,8 @@ class Settings:
     history_enabled: bool = True
 
     inventory_path: str | None = None
+    evidence_record: str | None = None
+    evidence_replay: str | None = None
 
     # Minutes a human spends triaging one finding by hand: read the CVE, find
     # where it runs, judge whether it matters, write it up or close it. Reported
@@ -93,6 +95,8 @@ class Settings:
             cache_enabled=not _flag("VULNOMETRY_NO_CACHE", False),
             history_enabled=not _flag("VULNOMETRY_NO_HISTORY", False),
             inventory_path=_env("VULNOMETRY_INVENTORY"),
+            evidence_record=_env("VULNOMETRY_EVIDENCE_RECORD"),
+            evidence_replay=_env("VULNOMETRY_EVIDENCE_REPLAY"),
             triage_minutes_low=_num("VULNOMETRY_TRIAGE_MINUTES_LOW", 30.0),
             triage_minutes_high=_num("VULNOMETRY_TRIAGE_MINUTES_HIGH", 120.0),
             default_model=_env("VULNOMETRY_MODEL"),

@@ -22,6 +22,7 @@ from ..assessment import (
     export_rows,
     suppression,
 )
+from ..evidence import run_date
 from ..inventory import TriagePolicy
 from ..schema import Assessment
 
@@ -282,7 +283,7 @@ def _findings_sheet(workbook: Workbook, records: list[dict]) -> None:
     sheet = workbook.active
     sheet.title = "Findings"
     _title(sheet, "Exposure assessment: one row per scanner row",
-           f"Generated {date.today().isoformat()} · {len(records)} rows · judgment per row: Fix, Schedule, Accept "
+           f"Generated {run_date().isoformat()} · {len(records)} rows · judgment per row: Fix, Schedule, Accept "
            "or Not analysed · Business Exposure Index 0-1000, higher means act sooner")
     header_row = _count_table(sheet, 4, _verdict_groups(records)) + 1
     _write_records(sheet, header_row, FINDINGS_COLUMNS, _order(records))
@@ -330,7 +331,7 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
     rows = [r for r in accepted if suppression(r)[0]]
     for rec in rows:
         item = rec["item"]
-        assessed = (item.measured_at or date.today().isoformat())[:10]
+        assessed = (item.measured_at or run_date().isoformat())[:10]
         until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
         rec["suppress_until"] = until
         why = rec["reason"].split(" — ", 1)[-1].split(" Context:")[0].rstrip(".")

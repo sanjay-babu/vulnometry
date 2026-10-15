@@ -21,6 +21,12 @@ Exposure model `bei-1.2`.
 
 ### Added
 
+- Reproducible runs. `VULNOMETRY_EVIDENCE_RECORD=path` writes every feed response a run used
+  (NVD, EPSS, KEV, OSV, GitHub) to a SQLite evidence file with the run's timestamp;
+  `VULNOMETRY_EVIDENCE_REPLAY=path` answers every request from that file, never touches the
+  network, and dates findings and due dates from the recorded run. Same export, inventory,
+  model version and evidence give the same workbook. A request missing from the file is a gap,
+  as it was in the recorded run.
 - Inventory `policy` block: `issue_types` puts other issue types (licence) Out of scope, and
   `priority_severities` marks rows of other scanner severities 'Not prioritised' while still
   judging them. A Priority column appears on every sheet, Engineering - fix lists non-priority
