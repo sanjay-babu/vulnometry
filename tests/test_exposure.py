@@ -258,3 +258,43 @@ def test_a_waf_is_credited_against_floods_but_not_against_a_local_attack():
     local_waf = measure_exposure(dos_only("LOCAL"), probability, ConfirmedExploitation(), [], behind_waf)
     assert local_waf.reachability == local_bare.reachability, "a WAF is not in the path of a local attack"
     assert any("not counted" in b for b in local_waf.reachability_basis)
+
+
+def _accepted(asset: AssetProfile, epss: float = 0.002):
+    from vulnometry.exposure import apply_floors
+
+    probability = ExploitProbability(probability=epss, resolved=True)
+    measure = measure_exposure(local_nuisance(), probability, ConfirmedExploitation(), [], asset)
+    assert measure.verdict == "Accept"
+    return measure, probability, apply_floors
+
+
+def test_guardrails_raise_an_accept_but_never_change_the_index():
+    exposed = AssetProfile(name="portal", tier=3, internet_exposed=True, deployed=True)
+    measure, probability, apply_floors = _accepted(exposed, epss=0.64)
+    index = measure.index
+    raised = apply_floors(measure, ConfirmedExploitation(), probability, exposed)
+    assert raised.verdict == "Schedule" and raised.scored_verdict == "Accept" and raised.index == index
+    assert "64.00%" in raised.floor_reason and "reopened" in raised.floor_reason
+
+    measure, probability, _ = _accepted(exposed)
+    kev = apply_floors(measure, ConfirmedExploitation(confirmed=True), probability, exposed)
+    assert kev.verdict == "Remediate" and "CISA KEV" in kev.floor_reason
+
+    measure, probability, _ = _accepted(exposed)
+    assert apply_floors(measure, ConfirmedExploitation(), probability, exposed, "reachable").verdict == "Schedule"
+    measure, probability, _ = _accepted(exposed)
+    assert apply_floors(measure, ConfirmedExploitation(), probability, exposed, "", "Mature").verdict == "Schedule"
+
+
+def test_guardrails_leave_a_well_founded_accept_alone():
+    internal = AssetProfile(name="batch", tier=3, internet_exposed=False, deployed=True)
+    measure, probability, apply_floors = _accepted(internal)
+    kept = apply_floors(measure, ConfirmedExploitation(), probability, internal, "reachable", "Mature")
+    assert kept.verdict == "Accept" and not kept.floor_reason, \
+        "a call path or mature exploit on an internal asset is kept open, not forced to a fix"
+    gone = AssetProfile(name="old", tier=1, internet_exposed=True, deployed=False)
+    measure = measure_exposure(wormable(), ExploitProbability(probability=0.9, resolved=True),
+                               ConfirmedExploitation(confirmed=True), [], gone)
+    assert apply_floors(measure, ConfirmedExploitation(confirmed=True), ExploitProbability(probability=0.9),
+                        gone).verdict == "Accept", "nothing to fix where the component is not deployed"

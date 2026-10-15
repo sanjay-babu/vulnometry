@@ -199,6 +199,10 @@ class ExposureMeasure(Serialisable):
     consequence_basis: list[str] = field(default_factory=list)
     collapsed_by: str = ""
     confidence: str = "medium"
+    # When a guardrail raised the verdict above what the index alone gives: the verdict the index
+    # gave, and why it was not allowed to stand. The index itself is never changed.
+    scored_verdict: str = ""
+    floor_reason: str = ""
 
 
 @dataclass
@@ -304,6 +308,8 @@ class Assessment(Serialisable):
             ("reachability", e.reachability, e.reachability_basis),
             ("consequence", e.consequence, e.consequence_basis),
         ]
+        if e.floor_reason:
+            return self._floored_rationale()
         urgent = e.verdict in ("Contain", "Remediate")
         name, _, basis = (max if urgent else min)(factors, key=lambda f: f[1])
         lead = {
@@ -328,6 +334,12 @@ class Assessment(Serialisable):
             if also:
                 parts.append("Also: " + "; ".join(_sentence(r) for r in also) + ".")
 
+        parts.append(self._context())
+        return " ".join(parts)
+
+    def _context(self) -> str:
+        """The facts a reader checks a verdict against, the fix situation, and the confidence."""
+        e = self.exposure
         ctx = [self.exposure_facing()]
         if self.tier:
             ctx.append(f"tier {self.tier}")
@@ -351,7 +363,7 @@ class Assessment(Serialisable):
                 if self.code_reachability == "reachable"
                 else "no call path to the vulnerable function"
             )
-        parts.append("Context: " + ", ".join(ctx) + ".")
+        parts = ["Context: " + ", ".join(ctx) + "."]
 
         if not self.fixes and e.verdict in ("Accept", "Schedule"):
             if self.scanner_fixability:
@@ -360,6 +372,22 @@ class Assessment(Serialisable):
                 parts.append("No fixed version published.")
         parts.append(f"Confidence: {e.confidence}.")
         return " ".join(parts)
+
+    def _floored_rationale(self) -> str:
+        """A verdict a guardrail raised: why it could not be accepted, then what the score said."""
+        e = self.exposure
+        index_said = (f"the exposure index alone ({e.index:.0f}) gives {e.scored_verdict}"
+                      + (f", on {'; '.join(_sentence(r) for r in self._lowest_reasons())}" if self._lowest_reasons()
+                         else ""))
+        return (f"{e.verdict}: {e.floor_reason}, so it is not left at {e.scored_verdict}. "
+                f"For the record, {index_said}. {self._context()}")
+
+    def _lowest_reasons(self) -> list[str]:
+        e = self.exposure
+        factors = [("threat", e.threat, e.threat_basis), ("reachability", e.reachability, e.reachability_basis),
+                   ("consequence", e.consequence, e.consequence_basis)]
+        name, _, basis = min(factors, key=lambda f: f[1])
+        return _reducing(name, basis)
 
     def one_line(self) -> str:
         bits = [self.cve_id, f"BEI {self.exposure.index:.0f}", self.exposure.verdict]
@@ -385,6 +413,15 @@ _REDUCING = {
 }
 
 
+_EPSS_PCT = re.compile(r"at (\d+(?:\.\d+)?)%")
+
+
+def _low_epss(line: str) -> bool:
+    """Below the EPSS level at which an accepted risk is reopened (10%), so it can explain a low score."""
+    match = _EPSS_PCT.search(line)
+    return not match or float(match.group(1)) < 10.0
+
+
 def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
     markers = _REDUCING.get(factor, ())
     found = []
@@ -394,7 +431,7 @@ def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
                 found.append(line)
     if factor == "threat":
         # An EPSS line is a reason for low threat only when it is low; public exploit material never is.
-        found = [line for line in found if not any(w in line for w in ("Public exploit",))]
+        found = [line for line in found if not any(w in line for w in ("Public exploit",)) and _low_epss(line)]
     return found[:limit]
 
 

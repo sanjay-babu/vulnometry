@@ -296,6 +296,47 @@ def measure_exposure(
     )
 
 
+# Guardrails: evidence that rules out accepting a risk, whatever the index says. They raise the
+# verdict to a floor and say why; the index is left as computed, so the arithmetic stays auditable.
+EPSS_FLOOR = 0.10            # the same level at which an accepted risk is reopened
+_RANK = {"Accept": 0, "Schedule": 1, "Remediate": 2, "Contain": 3}
+
+
+def apply_floors(
+    measure: ExposureMeasure,
+    exploitation: ConfirmedExploitation,
+    probability: ExploitProbability,
+    asset: AssetProfile,
+    code_reachability: str = "",
+    scanner_exploit_maturity: str = "",
+) -> ExposureMeasure:
+    if measure.collapsed_by == "not-deployed":
+        return measure
+    floors: list[tuple[str, str]] = []
+    if exploitation.confirmed:
+        floors.append(("Remediate", "it is exploited in the wild (CISA KEV), which rules out accepting or "
+                                    "deferring it"))
+    if probability.probability is not None and probability.probability >= EPSS_FLOOR:
+        floors.append(("Schedule", f"EPSS puts exploitation within 30 days at {probability.probability * 100:.2f}%, "
+                                   f"at or above the {EPSS_FLOOR * 100:.0f}% level at which an accepted risk is "
+                                   "reopened"))
+    facing = asset.internet_exposed is True
+    if facing and code_reachability == "reachable":
+        floors.append(("Schedule", "the scanner found a call path to the vulnerable function on an "
+                                   "internet-facing asset"))
+    if facing and (scanner_exploit_maturity or "").strip().lower() == "mature":
+        floors.append(("Schedule", "the scanner reports a mature exploit and the asset is internet-facing"))
+    raising = [(v, why) for v, why in floors if _RANK[v] > _RANK.get(measure.verdict, 0)]
+    if not raising:
+        return measure
+    top = max(_RANK[v] for v, _ in raising)
+    verdict = next(v for v, r in _RANK.items() if r == top)
+    measure.scored_verdict = measure.verdict
+    measure.verdict = verdict
+    measure.floor_reason = "; and ".join(why for _, why in raising)
+    return measure
+
+
 def directive_for(
     measure: ExposureMeasure,
     exploitation: ConfirmedExploitation,
@@ -327,6 +368,9 @@ def directive_for(
         parts.append(f"A fix exists ({', '.join(fixes[:3])}); take it with routine dependency upgrades.")
     elif fixes:
         parts.append(f"Upgrade to {', '.join(fixes[:3])}.")
+    if fixes and "no fix" in scanner_fixability.lower():
+        parts.append("The scanner offers no automatic fix path, which usually means the package arrives through "
+                     "another dependency: upgrade the parent that pulls it in, or pin the fixed version.")
     elif scanner_fixability and measure.verdict in ("Contain", "Remediate", "Schedule"):
         parts.append(f"Scanner fixability: {scanner_fixability}; see the scanner issue for the fixed version.")
     elif fixes_checked and measure.verdict in ("Contain", "Remediate"):

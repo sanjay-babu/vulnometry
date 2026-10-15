@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .config import settings
 from .evidence import run_date, run_timestamp
-from .exposure import directive_for, measure_exposure
+from .exposure import apply_floors, directive_for, measure_exposure
 from .feeds import advisories as adv_feed
 from .feeds import catalogue as kev_feed
 from .feeds import probability as epss_feed
@@ -65,6 +65,9 @@ def _same_package(component: str, token: str) -> bool:
     return bool(name) and (name == token or name.startswith(token))
 
 
+_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+
+
 def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
     """Fixed versions from the advisories. When the scanner's issue names a package, only that
     package's fixes: one CVE can span several packages, and a row is about one of them."""
@@ -75,6 +78,8 @@ def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
         remedies = mine or remedies
     fixes: list[str] = []
     for remedy in remedies:
+        if _COMMIT.match(remedy.fixed_in.strip()):
+            continue  # a git commit from a source-repository range, not a version anyone can upgrade to
         label = f"{remedy.component} {remedy.fixed_in}" if remedy.component else remedy.fixed_in
         if label not in fixes:
             fixes.append(label)
@@ -94,6 +99,7 @@ async def assess_finding(
     code_reachability: str = "",
     scanner_fixability: str = "",
     issue_id: str = "",
+    scanner_exploit_maturity: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -136,6 +142,7 @@ async def assess_finding(
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
+    measure = apply_floors(measure, exploitation, probability, asset, code_reachability, scanner_exploit_maturity)
     fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
     due_by = asset.due_date(measure.verdict, from_date=run_date(), policy=policy)
@@ -236,6 +243,7 @@ async def assess_portfolio(
                 code_reachability=row["code_reachability"],
                 scanner_fixability=str(row.get("fixability") or "").strip(),
                 issue_id=row.get("issue_id", "") or issue_id_from(row.get("issue_url", "")),
+                scanner_exploit_maturity=str(row.get("exploit_maturity") or "").strip(),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))

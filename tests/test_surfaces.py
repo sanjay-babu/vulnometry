@@ -631,3 +631,33 @@ def test_policy_puts_licence_rows_out_of_scope_and_still_judges_low_severity(tmp
     assert fixes[-1] == 8, "a Low comes after every priority row, even with an earlier due date"
     counts = _counts(workbook["Findings"])
     assert counts["Out of scope (issue type)"] == 1 and counts["Total"] == 8
+
+
+def test_a_raised_verdict_says_why_and_a_high_epss_is_never_a_reason_for_low_risk():
+    from vulnometry.schema import ExploitProbability
+
+    measure = ExposureMeasure(index=147, verdict="Schedule", scored_verdict="Accept", threat=0.8, reachability=0.1,
+                              consequence=0.9, floor_reason="EPSS puts exploitation within 30 days at 64.41%",
+                              reachability_basis=["Scanner's reachability analysis found no call path to the "
+                                                  "vulnerable function"],
+                              threat_basis=["EPSS puts exploitation within 30 days at 64.41%"], confidence="high")
+    item = Assessment(cve_id="CVE-2026-1", asset="portal", exposure=measure,
+                      probability=ExploitProbability(probability=0.6441, resolved=True))
+    text = item.rationale()
+    assert text.startswith("Schedule: EPSS puts exploitation within 30 days at 64.41%, so it is not left at Accept.")
+    assert "the exposure index alone (147) gives Accept, on scanner's reachability analysis found no call path" in text
+
+    accepted = Assessment(cve_id="CVE-2026-2", asset="portal", exposure=ExposureMeasure(
+        index=90, verdict="Accept", threat=0.9, reachability=0.05, consequence=0.5, confidence="high",
+        threat_basis=["EPSS puts exploitation within 30 days at 61.32%"],
+        reachability_basis=["portal is not internet-reachable"]))
+    assert "61.32%" not in accepted.rationale().split("Context:")[0], "a 61% EPSS cannot explain a low score"
+
+
+def test_a_git_commit_is_not_offered_as_a_fixed_version():
+    from vulnometry.assessment import _fix_versions
+    from vulnometry.schema import Bulletin, Remedy
+
+    bulletins = [Bulletin(remedies=[Remedy(component="", fixed_in="74b2db2938fad48a2ea54a9c8bf27a37a62c350d"),
+                                    Remedy(component="lodash", fixed_in="4.17.21")])]
+    assert _fix_versions(bulletins) == ["lodash 4.17.21"]
