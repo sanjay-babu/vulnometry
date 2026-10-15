@@ -78,9 +78,12 @@ def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
         remedies = mine or remedies
     fixes: list[str] = []
     for remedy in remedies:
-        if _COMMIT.match(remedy.fixed_in.strip()):
-            continue  # a git commit from a source-repository range, not a version anyone can upgrade to
-        label = f"{remedy.component} {remedy.fixed_in}" if remedy.component else remedy.fixed_in
+        # A git commit from a source-repository range is not a version anyone can upgrade to.
+        versions = [v.strip() for v in remedy.fixed_in.split(",") if v.strip() and not _COMMIT.match(v.strip())]
+        if not versions:
+            continue
+        fixed_in = ", ".join(versions)
+        label = f"{remedy.component} {fixed_in}" if remedy.component else fixed_in
         if label not in fixes:
             fixes.append(label)
     return fixes

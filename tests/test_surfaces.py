@@ -661,3 +661,29 @@ def test_a_git_commit_is_not_offered_as_a_fixed_version():
     bulletins = [Bulletin(remedies=[Remedy(component="", fixed_in="74b2db2938fad48a2ea54a9c8bf27a37a62c350d"),
                                     Remedy(component="lodash", fixed_in="4.17.21")])]
     assert _fix_versions(bulletins) == ["lodash 4.17.21"]
+
+
+def test_several_fixes_in_one_range_drop_only_the_commits():
+    from vulnometry.assessment import _fix_versions
+    from vulnometry.schema import Bulletin, Remedy
+
+    joined = Remedy(component="", fixed_in="4007498b13582d90ee1eda5d9920c324428b98b3, 986fb4892bb39f292ba0fd82eba11d2cbc503217")
+    mixed = Remedy(component="yaml", fixed_in="abc1234def, 2.4.1")
+    assert _fix_versions([Bulletin(remedies=[joined, mixed])]) == ["yaml 2.4.1"]
+
+
+def test_a_directive_names_the_upgrade_once():
+    from vulnometry.exposure import directive_for
+    from vulnometry.inventory import AssetProfile
+    from vulnometry.schema import ConfirmedExploitation
+
+    asset = AssetProfile(name="portal")
+    text = directive_for(ExposureMeasure(verdict="Schedule"), ConfirmedExploitation(), ["axios 1.15.1"], asset,
+                         scanner_fixability="Fixable")
+    assert "Upgrade to axios 1.15.1." in text and "see the scanner issue" not in text
+    text = directive_for(ExposureMeasure(verdict="Accept"), ConfirmedExploitation(), [], asset,
+                         scanner_fixability="Fixable")
+    assert "The scanner reports a fix (Fixable)" in text
+    text = directive_for(ExposureMeasure(verdict="Schedule"), ConfirmedExploitation(), ["x 1.0"], asset,
+                         scanner_fixability="No Fix Supported")
+    assert "parent that pulls it in" in text
