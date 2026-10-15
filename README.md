@@ -153,6 +153,7 @@ policy:
   issue_types: [vulnerability]                   # licence and other issue types become "Out of scope"
   priority_severities: [critical, high, medium]  # other scanner severities are still judged, but marked
                                                  # "Not prioritised" and listed last for engineering
+  suppress_accepted: safe                        # 'all' suppresses every accepted row in the scanner
 ```
 
 A row outside the priority severities is still scored and judged Fix, Schedule, Accept or Not

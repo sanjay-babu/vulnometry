@@ -452,7 +452,7 @@ async def _cmd_inventory_import(args) -> int:
         ERR.print(f"Merging into existing {target} ({len(existing.assets)} asset(s))")
 
     target.write_text(dump_inventory_yaml(inventory), encoding="utf-8")
-    OUT.print(f"[green]Wrote {target}[/] — {len(inventory.assets)} asset(s)")
+    OUT.print(f"[green]Wrote {target}[/]: {len(inventory.assets)} asset(s)")
 
     tiers: dict[str, int] = {}
     for asset in inventory.assets:

@@ -21,6 +21,7 @@ from ..assessment import (
     OUT_OF_SCOPE,
     awaiting_fix,
     export_rows,
+    scanner_flag,
     suppression,
 )
 from ..evidence import run_date
@@ -339,16 +340,24 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
         assessed = (item.measured_at or run_date().isoformat())[:10]
         until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
         rec["suppress_until"] = until
-        why = rec["reason"].split(" — ", 1)[-1].split(" Context:")[0].rstrip(".")
+        why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
+        flag = scanner_flag(item)
+        note = (f" Suppressed under the suppress-all policy although {flag}; re-assessed at the next review."
+                if flag else "")
         rec["ignore_reason"] = (f"Risk accepted: vulnometry {item.exposure.model_version} Accept "
-                                f"(BEI {item.exposure.index:.1f}) on {assessed}: {why}. Re-review by {until}.")[:500]
+                                f"(BEI {item.exposure.index:.1f}) on {assessed}: {why}. Re-review by {until}."
+                                + note)[:500]
     kept_open = len(accepted) - len(rows)
+    flagged = sum(1 for r in rows if scanner_flag(r["item"]))
     sheet = workbook.create_sheet("DevSecOps - suppress", 3)
     _title(sheet, "DevSecOps: accepted rows to suppress in the scanner",
            f"{len(rows)} row(s) to suppress as a temporary ignore until the date shown ({review_days} days, the "
-           f"next review). {kept_open} more accepted row(s) stay open in the scanner because its own evidence "
-           "argues against hiding them (call path found, mature exploit, or CISA KEV); see 'Accepted'. Rows "
-           "judged Not analysed are never suppressed. Fill 'Decided by' and 'Decision date' when signed off.")
+           "next review). "
+           + (f"{kept_open} more accepted row(s) stay open in the scanner because its own evidence argues against "
+              "hiding them (call path found, mature exploit, or CISA KEV); see 'Accepted'. " if kept_open else "")
+           + (f"{flagged} of the rows to suppress carry a scanner flag (call path or mature exploit); the policy "
+              "suppresses every accepted row, and the ignore reason records the flag. " if flagged else "")
+           + "Rows judged Not analysed are never suppressed. Fill 'Decided by' and 'Decision date' when signed off.")
     _write_records(sheet, 4, SUPPRESS_COLUMNS, _order(rows))
 
 
@@ -361,7 +370,7 @@ def _until_fixable_sheet(workbook: Workbook, records: list[dict], review_days: i
         until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
         rec["suppress_until"] = until
         rec["ignore_type"] = "temporary-ignore, until fixable"
-        why = rec["reason"].split(" — ", 1)[-1].split(" Context:")[0].rstrip(".")
+        why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
         rec["ignore_reason"] = (f"No fix available on {assessed} (no fixed version published; scanner: "
                                 f"{item.scanner_fixability or 'none'}). Risk stands: vulnometry "
                                 f"{item.exposure.model_version} Schedule (BEI {item.exposure.index:.1f}): {why}. "
@@ -384,7 +393,7 @@ def _accepted_sheet(workbook: Workbook, records: list[dict]) -> None:
     no_match = sum(1 for r in held if r["why_not"] == "No inventory match")
     thin = sum(1 for r in held if r["why_not"] == "Insufficient data")
     sheet = workbook.create_sheet("Accepted")
-    _title(sheet, "Accepted risk — rationale and sign-off",
+    _title(sheet, "Accepted risk: rationale and sign-off",
            f"{len(accepted)} row(s) judged Accept. The rationale columns are produced by the model; fill the "
            "Decision..Ticket columns and keep this as the audit record."
            + (f" {len(held)} more scored Accept but are left off (Not analysed: {no_match} with no inventory "
@@ -484,6 +493,9 @@ def _policy_text(summary: dict | None) -> str:
                      "scanner rates lower is still judged on exposure (Fix, Schedule, Accept or Not analysed) but "
                      "is marked 'Not prioritised' and listed after the priority rows on 'Engineering - fix', "
                      "unless the CVE is in CISA KEV (exploited in the wild).")
+    if policy.suppress_accepted == "all":
+        parts.append("Every accepted row is suppressed in the scanner until the next review, including rows the "
+                     "scanner flags (call path, mature exploit); the ignore reason records the flag.")
     return " ".join(parts) or ("None set: every row is in scope and every severity is a priority. Set "
                                "'policy.issue_types' and 'policy.priority_severities' in the inventory to apply one.")
 

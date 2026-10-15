@@ -322,14 +322,14 @@ class Assessment(Serialisable):
         }[(name, urgent)]
 
         if urgent:
-            parts = [f"{e.verdict}: {lead} — {(basis or ['no detail recorded'])[0]}."]
+            parts = [f"{e.verdict}: {lead}, because {_sentence((basis or ['no detail recorded'])[0])}."]
         else:
             # Cite what actually lowered the score, not whatever was recorded first: 'Attack vector
             # is network' is a reason something is reachable, so it can't explain 'hard to reach'.
             if name == "threat" and basis and basis[0].startswith("No EPSS"):
                 lead = "no exploitation data yet"
             reasons = _reducing(name, basis) or (basis or ["no detail recorded"])[:1]
-            parts = [f"{e.verdict}: {lead} — {'; '.join(_sentence(r) for r in reasons)}."]
+            parts = [f"{e.verdict}: {lead}, because {'; '.join(_sentence(r) for r in reasons)}."]
             also = [r for other, _, b in factors if other != name for r in _reducing(other, b)[:1]]
             if also:
                 parts.append("Also: " + "; ".join(_sentence(r) for r in also) + ".")

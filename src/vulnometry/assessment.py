@@ -564,6 +564,7 @@ def _severity_list(names: list[str]) -> str:
 
 def _apply_policy(rec: dict, policy) -> None:
     """The organisation's triage rules, applied after the exposure judgment and stated in the row."""
+    rec["suppress_all"] = policy.suppress_accepted == "all"
     if not policy.in_scope(rec.get("issue_type", "")):
         kind = (rec.get("issue_type") or "").strip().lower() or "non-vulnerability"
         rec.update(
@@ -606,17 +607,23 @@ def suppression(rec: dict) -> tuple[bool, str]:
     whenever the scanner's own evidence argues against it.
     """
     item = rec.get("item")
-    if rec.get("judgment") != "Accept":
+    if rec.get("judgment") != "Accept" or item is None:
         return False, "not accepted"
-    if item is None:
-        return False, "not accepted"
-    if item.exploitation.confirmed:
-        return False, "keep open: exploited in the wild (CISA KEV)"
-    if item.code_reachability == "reachable":
-        return False, "keep open: the scanner found a call path to the vulnerable function"
-    if (item.scanner_exploit_maturity or "").strip().lower() == "mature":
-        return False, "keep open: the scanner reports a mature exploit"
+    hold = scanner_flag(item)
+    if hold and not rec.get("suppress_all"):
+        return False, f"keep open: {hold}"
     return True, "suppress"
+
+
+def scanner_flag(item: Assessment) -> str:
+    """Evidence that argues against hiding an accepted row in the scanner, or ""."""
+    if item.exploitation.confirmed:
+        return "exploited in the wild (CISA KEV)"
+    if item.code_reachability == "reachable":
+        return "the scanner found a call path to the vulnerable function"
+    if (item.scanner_exploit_maturity or "").strip().lower() == "mature":
+        return "the scanner reports a mature exploit"
+    return ""
 
 
 def _count_verdicts(items) -> dict:

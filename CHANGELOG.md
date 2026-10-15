@@ -32,6 +32,10 @@ Exposure model `bei-1.3`.
 
 ### Added
 
+- `policy.suppress_accepted: all` suppresses every accepted row in the scanner, including rows the
+  scanner flags (call path, mature exploit); the ignore reason records the flag. The default, `safe`,
+  keeps flagged rows open.
+- Generated text no longer uses em dashes: rationales read "Accept: <lead>, because <reasons>".
 - A "DevSecOps - until fixable" sheet: rows judged Schedule where the advisories name no fixed
   version and the scanner says it has no fix. The judgment stays Schedule; the row is suppressed
   in the scanner until a fix is published (Snyk's disregardIfFixable), with the review date as a

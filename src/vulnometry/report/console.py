@@ -244,7 +244,7 @@ def to_markdown(items: list[Assessment], summary: dict | None = None) -> str:
         lines += ["", "## Accepted (below the action threshold)", ""]
         for item in accepted:
             lines.append(f"- **{item.cve_id}** on {item.where() or 'an unmatched target'} "
-                         f"(BEI {item.exposure.index:g}) — {item.rationale()}")
+                         f"(BEI {item.exposure.index:g}): {item.rationale()}")
         lines.append("")
 
     for item in items:

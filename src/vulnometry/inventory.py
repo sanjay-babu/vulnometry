@@ -86,6 +86,7 @@ class TriagePolicy:
         policy:
           issue_types: [vulnerability]                   # other types (licence, ...) are Out of scope
           priority_severities: [critical, high, medium]  # other scanner severities are not prioritised
+          suppress_accepted: safe                         # or 'all': suppress every Accept in the scanner
 
     Both are empty by default: every row is in scope and every severity is a priority. A row
     outside the priority severities is still judged on exposure like any other; it is only
@@ -95,6 +96,9 @@ class TriagePolicy:
 
     issue_types: list[str] = field(default_factory=list)
     priority_severities: list[str] = field(default_factory=list)
+    # 'safe' keeps an accepted row open in the scanner when the scanner's own evidence argues against
+    # hiding it (call path, mature exploit); 'all' suppresses every accepted row and notes that evidence.
+    suppress_accepted: str = "safe"
 
     @classmethod
     def from_dict(cls, raw) -> TriagePolicy:
@@ -114,7 +118,10 @@ class TriagePolicy:
         if unknown:
             raise ValueError(f"policy.priority_severities: unknown severity {unknown[0]!r} "
                              f"({', '.join(SEVERITY_NAMES)})")
-        return cls(issue_types=names("issue_types"), priority_severities=severities)
+        suppress = str(raw.get("suppress_accepted") or "safe").strip().lower()
+        if suppress not in ("safe", "all"):
+            raise ValueError(f"policy.suppress_accepted: {suppress!r} (safe or all)")
+        return cls(issue_types=names("issue_types"), priority_severities=severities, suppress_accepted=suppress)
 
     def in_scope(self, issue_type: str) -> bool:
         kind = (issue_type or "").strip().lower()
@@ -128,7 +135,8 @@ class TriagePolicy:
         return not self.priority_severities or band not in SEVERITY_NAMES or band in self.priority_severities
 
     def to_dict(self) -> dict:
-        return {"issue_types": self.issue_types, "priority_severities": self.priority_severities}
+        return {"issue_types": self.issue_types, "priority_severities": self.priority_severities,
+                "suppress_accepted": self.suppress_accepted}
 
 
 @dataclass

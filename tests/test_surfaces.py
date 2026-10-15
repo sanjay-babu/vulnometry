@@ -482,7 +482,7 @@ def test_accept_rationale_cites_what_lowered_the_score():
                                 "Scanner's reachability analysis found no call path to the vulnerable function"],
             consequence_basis=["CVSS impact C:HIGH I:HIGH A:HIGH"]))
     text = item.rationale()
-    assert text.startswith("Accept: hard to reach in this environment — scanner's reachability analysis found no "
+    assert text.startswith("Accept: hard to reach in this environment, because scanner's reachability analysis found no "
                            "call path to the vulnerable function; billing is not internet-reachable.")
     assert "Attack vector is network" not in text.split("Context:")[0], "a reason to reach is not a reason not to"
     assert "Also: EPSS puts exploitation within 30 days at 0.40%" in text
@@ -582,7 +582,7 @@ def test_rationale_keeps_names_as_written():
                                                consequence=0.8, confidence="high",
                                                reachability_basis=["Attack vector is network",
                                                                    "Bridger Search is not internet-reachable"]))
-    assert "— Bridger Search is not internet-reachable." in item.rationale()
+    assert "because Bridger Search is not internet-reachable." in item.rationale()
 
 
 def test_an_accept_mentions_its_fix_without_demanding_it():
@@ -725,3 +725,29 @@ def test_a_schedule_row_with_no_fix_anywhere_waits_in_the_scanner_instead_of_the
     assert 8 not in engineering and {9, 10, 4} <= engineering, "missing fix data alone never parks a row"
     by_row = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Judgment"])}
     assert by_row[8]["Judgment"] == "Schedule", "parking it does not change the judgment"
+
+
+def test_suppress_all_hides_every_accept_and_records_the_scanner_flag(tmp_path):
+    from openpyxl import load_workbook
+
+    items, summary = _snyk_like_rows()
+    url = "https://scanner.example/org/o/project/p3"
+    items.append(Assessment(cve_id="CVE-2026-7001", asset="checkout-api", scanner_severity="High", source_row=8,
+                            issue_url=url + "#issue-SNYK-JS-Y-1", issue_id="SNYK-JS-Y-1", code_reachability="reachable",
+                            exposure=ExposureMeasure(index=90, verdict="Accept", confidence="high")))
+    safe = load_workbook(build_workbook(items, tmp_path / "safe.xlsx", summary))
+    assert 8 not in {r["Export row"] for r in _table(safe["DevSecOps - suppress"], ["Export row"])}
+    summary["policy"] = {"suppress_accepted": "all"}
+    every = load_workbook(build_workbook(items, tmp_path / "all.xlsx", summary))
+    rows = {r["Export row"]: r for r in _table(every["DevSecOps - suppress"], ["Export row", "Ignore reason"])}
+    assert 8 in rows and "although the scanner found a call path" in rows[8]["Ignore reason"]
+
+
+def test_nothing_the_workbook_writes_uses_an_em_dash(tmp_path):
+    from openpyxl import load_workbook
+
+    items, summary = _snyk_like_rows()
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows(values_only=True):
+            assert not any(isinstance(v, str) and "—" in v for v in row), sheet.title
