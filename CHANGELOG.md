@@ -6,9 +6,16 @@ that any change to the exposure model bumps `MODEL_VERSION` independently.
 
 ## [Unreleased]
 
-Exposure model `bei-1.2`.
+Exposure model `bei-1.3`.
 
 ### Changed
+
+- A WAF (or other network control) is credited only for weaknesses it can filter: injection,
+  cross-site scripting, path traversal, SSRF, XXE, deserialization payloads, request smuggling,
+  header injection, and denial of service. Authentication, cryptography, authorisation, data
+  exposure, prototype pollution and unclassified weaknesses get no credit, and the rationale says
+  the control was not counted. The weakness class comes from the scanner's CWE column when the
+  export has one (new intake alias `cwe`), otherwise from the CVE record.
 
 - Fixed versions no longer include git commit hashes from source-repository ranges, and an EPSS of
   10% or more is never cited as a reason for a low score. Directives name the upgrade once and,

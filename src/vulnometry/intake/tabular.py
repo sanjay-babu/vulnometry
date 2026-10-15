@@ -55,6 +55,8 @@ COLUMN_ALIASES = {
     "issue_type": ["issuetype", "findingtype", "problemtype"],
     # The scanner's view of exploit maturity (Snyk: Mature / Proof of Concept / No Known Exploit).
     "exploit_maturity": ["exploitmaturity", "exploitability", "exploitstatus"],
+    # The weakness class the scanner assigned to the row (CWE-79, ...): decides which controls apply.
+    "cwe": ["cwe", "cweid", "cwes", "cweids"],
 }
 
 _MAX_SCAN_ROWS = 25
@@ -287,6 +289,7 @@ def parse_tabular(path: str | Path, sheet: str = "", unscored: list | None = Non
             "fixability": _cell(row, mapping.get("fixability")),
             "issue_type": _cell(row, mapping.get("issue_type")),
             "exploit_maturity": _cell(row, mapping.get("exploit_maturity")),
+            "cwe": _cell(row, mapping.get("cwe")),
         }
         if not cve_ids:
             if unscored is not None:

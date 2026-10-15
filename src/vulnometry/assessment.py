@@ -66,6 +66,7 @@ def _same_package(component: str, token: str) -> bool:
 
 
 _COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+_CWE = re.compile(r"CWE-\d+")
 
 
 def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
@@ -102,6 +103,7 @@ async def assess_finding(
     code_reachability: str = "",
     scanner_fixability: str = "",
     issue_id: str = "",
+    scanner_cwe: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -143,7 +145,9 @@ async def assess_finding(
     artifacts = list(resolved.get("artifacts") or [])
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
-    measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
+    # The scanner's CWE for this row is more specific than the CVE's (one CVE can list several).
+    cwe_ids = _CWE.findall(scanner_cwe.upper()) or list(weakness.cwe_ids)
+    measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability, cwe_ids)
     measure = apply_floors(measure, exploitation, probability, asset)
     fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
@@ -245,6 +249,7 @@ async def assess_portfolio(
                 code_reachability=row["code_reachability"],
                 scanner_fixability=str(row.get("fixability") or "").strip(),
                 issue_id=row.get("issue_id", "") or issue_id_from(row.get("issue_url", "")),
+                scanner_cwe=str(row.get("cwe") or ""),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))

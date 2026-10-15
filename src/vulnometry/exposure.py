@@ -11,7 +11,7 @@ from .schema import (
     Weakness,
 )
 
-MODEL_VERSION = "bei-1.2"
+MODEL_VERSION = "bei-1.3"
 
 THREAT_EXPONENT = 0.8
 REACH_EXPONENT = 0.7
@@ -46,6 +46,32 @@ _NETWORK_CONTROL_WORDS = ("waf", "firewall", "ddos", "rate limit", "rate-limit",
 # attacker must already be on the internal network, and the worst case is a recoverable outage of
 # one internal system, not a breach. Halves the consequence.
 INTERNAL_DOS_CONSEQUENCE = 0.5
+
+
+# What a WAF can actually stop: attacks carried in the content of a web request, which its rules
+# inspect, and request floods, which its rate limiting absorbs. It does nothing for weaknesses in
+# authentication, cryptography, authorisation logic or data handling, so they get no credit.
+_WAF_FILTERS = {
+    **dict.fromkeys(("CWE-74", "CWE-75", "CWE-77", "CWE-78", "CWE-88", "CWE-89", "CWE-90", "CWE-91", "CWE-94",
+                     "CWE-95", "CWE-96", "CWE-97", "CWE-564", "CWE-917", "CWE-943", "CWE-1336"), "injection"),
+    **dict.fromkeys(("CWE-79", "CWE-80", "CWE-83", "CWE-87"), "cross-site scripting"),
+    **dict.fromkeys(("CWE-22", "CWE-23", "CWE-24", "CWE-25", "CWE-35", "CWE-36", "CWE-73"), "path traversal"),
+    "CWE-918": "server-side request forgery",
+    **dict.fromkeys(("CWE-611", "CWE-827"), "XML external entities"),
+    "CWE-502": "deserialization payloads",
+    "CWE-444": "request smuggling",
+    **dict.fromkeys(("CWE-93", "CWE-113"), "header injection (CRLF)"),
+    **dict.fromkeys(("CWE-400", "CWE-405", "CWE-407", "CWE-409", "CWE-606", "CWE-674", "CWE-770", "CWE-776",
+                     "CWE-834", "CWE-835", "CWE-1050", "CWE-1333"), "denial of service"),
+}
+
+
+def waf_filters(severity, cwe_ids: list[str] | None) -> str:
+    """The attack class a WAF in front of the asset filters for this weakness, or "" when it does not."""
+    for cwe in cwe_ids or []:
+        if cwe in _WAF_FILTERS:
+            return _WAF_FILTERS[cwe]
+    return "denial of service" if availability_only(severity) else ""
 
 
 def _network_control(name: str) -> bool:
@@ -123,6 +149,7 @@ def compute_reachability(
     asset: AssetProfile,
     code_reachability: str = "",
     exploited: bool = False,
+    cwe_ids: list[str] | None = None,
 ) -> tuple[float, list[str], str]:
     basis: list[str] = []
     severity = weakness.primary_severity()
@@ -168,16 +195,25 @@ def compute_reachability(
 
     if asset.has_controls:
         local = severity is not None and _first_letter(severity.attack_vector) in ("L", "P")
-        applicable = [c for c in asset.compensating_controls if not (local and _network_control(c))]
+        network = [c for c in asset.compensating_controls if _network_control(c)]
+        applicable = [c for c in asset.compensating_controls if c not in network]
+        kind = waf_filters(severity, cwe_ids)
+        if network and local:
+            basis.append(f"{', '.join(network[:3])} not counted: a network control is not in the path of a "
+                         "local attack")
+        elif network and not kind:
+            weakness_name = ", ".join((cwe_ids or [])[:2]) or "an unclassified weakness"
+            basis.append(f"{', '.join(network[:3])} not counted: a WAF does not filter this kind of weakness "
+                         f"({weakness_name})")
+        else:
+            applicable += network
         if applicable:
             reach *= 0.45
             line = f"Compensating controls in place: {', '.join(applicable[:3])}"
-            if availability_only(severity) and any(_network_control(c) for c in applicable):
-                line += " (rate limiting and request filtering in front of the app blunt denial-of-service traffic)"
+            if network and network[0] in applicable:
+                line += (" (rate limiting and request filtering in front of the app blunt denial-of-service traffic)"
+                         if kind == "denial of service" else f" (its rules inspect requests for {kind})")
             basis.append(line)
-        else:
-            basis.append(f"{', '.join(asset.compensating_controls[:3])} not counted: a network control is not "
-                         "in the path of a local attack")
 
     if code_reachability == "reachable":
         basis.append("Scanner's reachability analysis found a call path to the vulnerable function")
@@ -264,13 +300,14 @@ def measure_exposure(
     artifacts: list[ExploitArtifact] | None = None,
     asset: AssetProfile | None = None,
     code_reachability: str = "",
+    cwe_ids: list[str] | None = None,
 ) -> ExposureMeasure:
     artifacts = artifacts or []
     asset = asset or UNKNOWN_ASSET
 
     threat, threat_basis = compute_threat(probability, exploitation, artifacts)
     reach, reach_basis, collapsed = compute_reachability(
-        weakness, asset, code_reachability, exploited=exploitation.confirmed
+        weakness, asset, code_reachability, exploited=exploitation.confirmed, cwe_ids=cwe_ids
     )
     consequence, consequence_basis = compute_consequence(weakness, asset)
 

@@ -107,7 +107,7 @@ def test_compensating_controls_reduce_reachability_only():
                             ConfirmedExploitation(), [], CROWN_JEWEL)
     guarded = AssetProfile(**{**CROWN_JEWEL.__dict__, "compensating_controls": ["WAF virtual patch"]})
     with_controls = measure_exposure(wormable(), ExploitProbability(probability=0.5, resolved=True),
-                                     ConfirmedExploitation(), [], guarded)
+                                     ConfirmedExploitation(), [], guarded, cwe_ids=["CWE-89"])
     assert with_controls.reachability < base.reachability
     assert with_controls.consequence == base.consequence
     assert with_controls.threat == base.threat
@@ -294,3 +294,29 @@ def test_guardrails_leave_a_well_founded_accept_alone():
                                ConfirmedExploitation(confirmed=True), [], gone)
     assert apply_floors(measure, ConfirmedExploitation(confirmed=True), ExploitProbability(probability=0.9),
                         gone).verdict == "Accept", "nothing to fix where the component is not deployed"
+
+
+def test_a_waf_is_credited_only_against_what_it_filters():
+    probability = ExploitProbability(probability=0.01, resolved=True)
+    guarded = AssetProfile(name="login", tier=1, internet_exposed=True, deployed=True,
+                           compensating_controls=["Edge WAF"])
+    bare = AssetProfile(name="login", tier=1, internet_exposed=True, deployed=True)
+    plain = measure_exposure(wormable(), probability, ConfirmedExploitation(), [], bare, cwe_ids=["CWE-79"])
+    xss = measure_exposure(wormable(), probability, ConfirmedExploitation(), [], guarded, cwe_ids=["CWE-79"])
+    assert xss.reachability < plain.reachability
+    assert any("inspect requests for cross-site scripting" in b for b in xss.reachability_basis)
+    for cwe in (["CWE-287"], ["CWE-1321"], ["CWE-295"], []):
+        flaw = measure_exposure(wormable(), probability, ConfirmedExploitation(), [], guarded, cwe_ids=cwe)
+        assert flaw.reachability == plain.reachability, f"a WAF does nothing for {cwe or 'unknown'}"
+        assert any("not counted: a WAF does not filter this kind of weakness" in b for b in flaw.reachability_basis)
+
+
+def test_the_rationale_says_when_a_waf_was_not_counted():
+    from vulnometry.schema import Assessment
+
+    guarded = AssetProfile(name="login", tier=1, internet_exposed=True, deployed=True,
+                           compensating_controls=["Edge WAF"])
+    measure = measure_exposure(wormable(), ExploitProbability(probability=0.01, resolved=True),
+                               ConfirmedExploitation(), [], guarded, cwe_ids=["CWE-287"])
+    text = Assessment(cve_id="CVE-2024-1", asset="login", exposure=measure).rationale()
+    assert "Edge WAF not counted: a WAF does not filter this kind of weakness (CWE-287)." in text

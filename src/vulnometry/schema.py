@@ -190,7 +190,7 @@ class ExposureMeasure(Serialisable):
 
     index: float = 0.0
     verdict: str = "Accept"
-    model_version: str = "bei-1.2"
+    model_version: str = "bei-1.3"
     threat: float = 0.0
     reachability: float = 0.0
     consequence: float = 0.0
@@ -364,6 +364,7 @@ class Assessment(Serialisable):
                 else "no call path to the vulnerable function"
             )
         parts = ["Context: " + ", ".join(ctx) + "."]
+        parts += [line[0].upper() + line[1:] + "." for line in e.reachability_basis if " not counted: " in line]
 
         if not self.fixes and e.verdict in ("Accept", "Schedule"):
             if self.scanner_fixability:
