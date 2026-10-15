@@ -594,3 +594,40 @@ def test_an_accept_mentions_its_fix_without_demanding_it():
     assert text.startswith("No action warranted.")
     assert "A fix exists (js-yaml 4.2.0); take it with routine dependency upgrades." in text
     assert "Upgrade to" not in text
+
+
+def test_policy_puts_licence_rows_out_of_scope_and_still_judges_low_severity(tmp_path):
+    from openpyxl import load_workbook
+
+    from vulnometry.assessment import not_scored_summary
+    from vulnometry.schema import ConfirmedExploitation
+
+    items, summary = _snyk_like_rows()
+    items += [
+        Assessment(cve_id="CVE-2026-5001", asset="checkout-api", scanner="Snyk", scanner_severity="Low",
+                   due_by="2026-10-20", source_row=8, exposure=ExposureMeasure(index=200, verdict="Schedule")),
+        Assessment(cve_id="CVE-2026-5002", asset="checkout-api", scanner="Snyk", scanner_severity="Low",
+                   due_by="2027-02-01", source_row=9, exploitation=ConfirmedExploitation(confirmed=True),
+                   exposure=ExposureMeasure(index=300, verdict="Schedule")),
+    ]
+    summary["not_scored"] = not_scored_summary([
+        {"raw_severity": "Low", "asset": "web", "title": "GPL-3.0 license", "row": 7, "issue_type": "License",
+         "issue_url": "https://scanner.example/p2#issue-snyk:lic:gpl"}])
+    summary["policy"] = {"issue_types": ["vulnerability"], "priority_severities": ["critical", "high", "medium"]}
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    by_row = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Judgment", "Priority",
+                                                                         "Due by", "Rationale"])}
+    assert by_row[7]["Judgment"] == "Out of scope" and "license issue, not a vulnerability" in by_row[7]["Rationale"]
+    assert by_row[8]["Judgment"] == "Schedule", "a Low is judged on exposure, not accepted on severity"
+    assert by_row[8]["Priority"] == "Not prioritised (Low)" and by_row[8]["Due by"] == "2026-10-20"
+    assert by_row[6]["Judgment"] == "Accept" and by_row[6]["Priority"] == "Not prioritised (Low)"
+    assert by_row[9]["Priority"] == "Priority" and "CISA KEV" in by_row[9]["Rationale"], \
+        "exploited in the wild is always a priority"
+    assert by_row[2]["Priority"] == "Priority"
+
+    engineering = [r["Export row"] for r in _table(workbook["Engineering - fix"], ["Export row"])]
+    assert 7 not in engineering, "out of scope rows go to nobody"
+    fixes = [r for r in engineering if r in (2, 3, 4, 8, 9)]
+    assert fixes[-1] == 8, "a Low comes after every priority row, even with an earlier due date"
+    counts = _counts(workbook["Findings"])
+    assert counts["Out of scope (issue type)"] == 1 and counts["Total"] == 8

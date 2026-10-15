@@ -190,7 +190,7 @@ class ExposureMeasure(Serialisable):
 
     index: float = 0.0
     verdict: str = "Accept"
-    model_version: str = "bei-1.1"
+    model_version: str = "bei-1.2"
     threat: float = 0.0
     reachability: float = 0.0
     consequence: float = 0.0
@@ -380,7 +380,8 @@ _REDUCING = {
         "Requires some level", "Needs a user", "Internet exposure unknown",
     ),
     "threat": ("EPSS puts exploitation",),
-    "consequence": ("CVSS impact", "base score", "supporting", "Holds internal data", "Holds public data"),
+    "consequence": ("Denial of service only", "CVSS impact", "base score", "supporting", "Holds internal data",
+                    "Holds public data"),
 }
 
 
@@ -397,7 +398,7 @@ def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
     return found[:limit]
 
 
-_LOWER_FIRST = ("Scanner's", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ",
+_LOWER_FIRST = ("Scanner's", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ", "Denial",
                 "Public", "Holds", "In scope", "Production", "Development")
 
 

@@ -453,8 +453,11 @@ def not_scored_summary(rows: list[dict]) -> dict:
 
 
 NOT_ANALYSED = "Not analysed"
+OUT_OF_SCOPE = "Out of scope"
 JUDGMENT = {"Contain": "Fix", "Remediate": "Fix", "Schedule": "Schedule", "Accept": "Accept"}
-JUDGMENT_ORDER = ["Fix", "Schedule", NOT_ANALYSED, "Accept"]
+JUDGMENT_ORDER = ["Fix", "Schedule", NOT_ANALYSED, "Accept", OUT_OF_SCOPE]
+PRIORITY = "Priority"
+NOT_PRIORITISED = "Not prioritised"
 
 
 def issue_id_from(url: str) -> str:
@@ -463,13 +466,18 @@ def issue_id_from(url: str) -> str:
     return text.split("#issue-", 1)[1] if "#issue-" in text else ""
 
 
-def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | None = None) -> list[dict]:
+def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | None = None,
+                policy=None) -> list[dict]:
     """One record per row of the scanner export, each with a judgment: Fix, Schedule, Accept or Not analysed.
 
     A row listing several CVEs is judged on its worst one. Rows the model could not score (no CVE)
     and findings it could not analyse (no inventory match) are 'Not analysed', with the reason.
     Findings that came from something other than a spreadsheet have no row number and are one
     record each. When the same issue link appears on two rows, the later one notes the earlier.
+
+    ``policy`` (the inventory's TriagePolicy) then applies the organisation's rules: rows of an
+    issue type it does not cover are 'Out of scope', and rows outside the severities it prioritises
+    keep their judgment but are marked 'Not prioritised', unless the CVE is exploited in the wild.
     """
     grouped: dict[int, list[Assessment]] = {}
     records: list[dict] = []
@@ -494,8 +502,11 @@ def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | Non
                        "Review it against the licence policy." if licence else
                        "Not analysed: no CVE identifier (a scanner-only advisory). Exposure is scored per CVE, "
                        "so only the scanner's severity applies."),
-            "duplicate_of": None,
+            "duplicate_of": None, "priority": "", "directive": "",
         })
+    if policy is not None:
+        for rec in records:
+            _apply_policy(rec, policy)
     first_seen: dict[str, int] = {}
     for rec in sorted(records, key=lambda r: r["row"] or 10**9):
         url = rec["issue_url"]
@@ -527,7 +538,35 @@ def _record(row: int, item: Assessment, cves: list[str]) -> dict:
         "verdict": item.exposure.verdict if analysed else NOT_ANALYSED,
         "judgment": JUDGMENT.get(item.exposure.verdict, item.exposure.verdict) if analysed else NOT_ANALYSED,
         "why_not": why_not, "reason": reason, "duplicate_of": None,
+        "priority": "", "directive": "",
     }
+
+
+def _severity_list(names: list[str]) -> str:
+    names = [n.title() for n in names]
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _apply_policy(rec: dict, policy) -> None:
+    """The organisation's triage rules, applied after the exposure judgment and stated in the row."""
+    if not policy.in_scope(rec.get("issue_type", "")):
+        kind = (rec.get("issue_type") or "").strip().lower() or "non-vulnerability"
+        rec.update(
+            judgment=OUT_OF_SCOPE, verdict=OUT_OF_SCOPE, analysed=False, why_not="",
+            reason=(f"Out of scope: a {kind} issue, not a vulnerability. This assessment covers "
+                    f"{_severity_list(policy.issue_types).lower()} issues only (inventory 'policy.issue_types')."),
+            directive="None in this assessment; handle under the policy that covers this issue type.",
+        )
+        return
+    item = rec.get("item")
+    if policy.prioritised(rec.get("scanner_severity", "")):
+        rec["priority"] = PRIORITY
+    elif item is not None and item.exploitation.confirmed:
+        rec["priority"] = PRIORITY
+        rec["reason"] += (f" Prioritised although the scanner rates it {rec['scanner_severity']}: it is exploited "
+                          "in the wild (CISA KEV).")
+    else:
+        rec["priority"] = f"{NOT_PRIORITISED} ({rec['scanner_severity']})"
 
 
 def suppression(rec: dict) -> tuple[bool, str]:
@@ -537,7 +576,9 @@ def suppression(rec: dict) -> tuple[bool, str]:
     whenever the scanner's own evidence argues against it.
     """
     item = rec.get("item")
-    if rec.get("judgment") != "Accept" or item is None:
+    if rec.get("judgment") != "Accept":
+        return False, "not accepted"
+    if item is None:
         return False, "not accepted"
     if item.exploitation.confirmed:
         return False, "keep open: exploited in the wild (CISA KEV)"

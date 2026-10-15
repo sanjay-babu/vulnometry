@@ -213,3 +213,48 @@ def test_model_version_default_matches_the_model():
     from vulnometry.schema import ExposureMeasure
 
     assert ExposureMeasure().model_version == MODEL_VERSION
+
+
+def dos_only(vector: str = "NETWORK") -> Weakness:
+    return Weakness(
+        cve_id="CVE-2024-3",
+        resolved=True,
+        severities=[Severity(
+            version="3.1", base_score=7.5, rating="HIGH",
+            attack_vector=vector, attack_complexity="LOW",
+            privileges_required="NONE", user_interaction="NONE",
+            confidentiality="NONE", integrity="NONE", availability="HIGH",
+        )],
+    )
+
+
+def _internal(**extra) -> AssetProfile:
+    return AssetProfile(name="ledger", tier=1, internet_exposed=False, environment="production",
+                        data_classification="confidential", deployed=True, **extra)
+
+
+def test_denial_of_service_on_an_internal_app_halves_the_consequence():
+    probability = ExploitProbability(probability=0.01, resolved=True)
+    internal_dos = measure_exposure(dos_only(), probability, ConfirmedExploitation(), [], _internal())
+    external = AssetProfile(name="portal", tier=1, internet_exposed=True, environment="production",
+                            data_classification="confidential", deployed=True)
+    external_dos = measure_exposure(dos_only(), probability, ConfirmedExploitation(), [], external)
+    assert round(internal_dos.consequence * 2, 3) == round(external_dos.consequence, 3)
+    assert any("Denial of service only" in b and "inside the network" in b for b in internal_dos.consequence_basis)
+    assert not any("Denial of service only" in b for b in external_dos.consequence_basis)
+    full_impact = measure_exposure(wormable(7.5), probability, ConfirmedExploitation(), [], _internal())
+    assert not any("Denial of service only" in b for b in full_impact.consequence_basis), \
+        "a flaw that can read or change data is not discounted as an outage"
+
+
+def test_a_waf_is_credited_against_floods_but_not_against_a_local_attack():
+    probability = ExploitProbability(probability=0.01, resolved=True)
+    behind_waf = AssetProfile(name="portal", tier=1, internet_exposed=True, deployed=True,
+                              compensating_controls=["Edge WAF"])
+    remote = measure_exposure(dos_only(), probability, ConfirmedExploitation(), [], behind_waf)
+    assert any("Edge WAF" in b and "denial-of-service traffic" in b for b in remote.reachability_basis)
+    bare = AssetProfile(name="portal", tier=1, internet_exposed=True, deployed=True)
+    local_bare = measure_exposure(dos_only("LOCAL"), probability, ConfirmedExploitation(), [], bare)
+    local_waf = measure_exposure(dos_only("LOCAL"), probability, ConfirmedExploitation(), [], behind_waf)
+    assert local_waf.reachability == local_bare.reachability, "a WAF is not in the path of a local attack"
+    assert any("not counted" in b for b in local_waf.reachability_basis)

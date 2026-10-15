@@ -11,7 +11,7 @@ from .schema import (
     Weakness,
 )
 
-MODEL_VERSION = "bei-1.1"
+MODEL_VERSION = "bei-1.2"
 
 THREAT_EXPONENT = 0.8
 REACH_EXPONENT = 0.7
@@ -36,6 +36,30 @@ MATURITY_THREAT = {"weaponised": 0.78, "proof-of-concept": 0.55, "referenced": 0
 # than zeroes. 0.4 is the same weight as "not internet-reachable", and after the
 # 0.7 exponent it roughly halves the index: about one verdict band.
 CODE_UNREACHABLE_REACH = 0.4
+
+# Controls that sit in the network path (a WAF, a firewall, a DDoS or rate-limiting service).
+# They filter traffic, so they do nothing against an attack that needs local or physical access.
+_NETWORK_CONTROL_WORDS = ("waf", "firewall", "ddos", "rate limit", "rate-limit", "rate limiting", "cdn",
+                          "web application firewall", "intrusion prevention")
+
+# Denial of service only (no confidentiality or integrity impact) against an internal asset: an
+# attacker must already be on the internal network, and the worst case is a recoverable outage of
+# one internal system, not a breach. Halves the consequence.
+INTERNAL_DOS_CONSEQUENCE = 0.5
+
+
+def _network_control(name: str) -> bool:
+    text = name.lower()
+    return any(word in text for word in _NETWORK_CONTROL_WORDS)
+
+
+def availability_only(severity) -> bool:
+    """CVSS impact is to availability alone: the flaw can take the service down but not read or change data."""
+    if severity is None:
+        return False
+    c, i, a = (_first_letter(severity.confidentiality), _first_letter(severity.integrity),
+               _first_letter(severity.availability))
+    return c == "N" and i == "N" and a in ("H", "L")
 
 
 def _first_letter(value: str) -> str:
@@ -143,8 +167,17 @@ def compute_reachability(
         basis.append("Deployment status unconfirmed")
 
     if asset.has_controls:
-        reach *= 0.45
-        basis.append(f"Compensating controls in place: {', '.join(asset.compensating_controls[:3])}")
+        local = severity is not None and _first_letter(severity.attack_vector) in ("L", "P")
+        applicable = [c for c in asset.compensating_controls if not (local and _network_control(c))]
+        if applicable:
+            reach *= 0.45
+            line = f"Compensating controls in place: {', '.join(applicable[:3])}"
+            if availability_only(severity) and any(_network_control(c) for c in applicable):
+                line += " (rate limiting and request filtering in front of the app blunt denial-of-service traffic)"
+            basis.append(line)
+        else:
+            basis.append(f"{', '.join(asset.compensating_controls[:3])} not counted: a network control is not "
+                         "in the path of a local attack")
 
     if code_reachability == "reachable":
         basis.append("Scanner's reachability analysis found a call path to the vulnerable function")
@@ -182,6 +215,10 @@ def compute_consequence(weakness: Weakness, asset: AssetProfile) -> tuple[float,
         basis.append("No CVSS published, impact assumed moderate pending analysis")
 
     consequence = impact * asset.tier_weight
+    if availability_only(severity) and asset.internet_exposed is False:
+        consequence *= INTERNAL_DOS_CONSEQUENCE
+        basis.append("Denial of service only, no data read or changed, on an internal app: an attacker must "
+                     "already be inside the network, and the worst case is a recoverable outage")
     basis.append(f"{asset.name} is {asset.tier_label} (tier weight {asset.tier_weight:g})")
 
     consequence *= asset.data_weight

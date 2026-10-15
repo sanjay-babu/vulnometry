@@ -6,9 +6,25 @@ that any change to the exposure model bumps `MODEL_VERSION` independently.
 
 ## [Unreleased]
 
-Exposure model `bei-1.1`.
+Exposure model `bei-1.2`.
+
+### Changed
+
+- Denial of service against an internal asset: when the CVSS impact is to availability alone
+  (C:N/I:N) and the asset is not internet-exposed, Consequence is halved. The attacker has to be
+  inside the network already and the worst case is a recoverable outage, not a breach. The
+  rationale says so.
+- Network controls (a WAF, firewall, CDN or DDoS service) no longer discount a CVE whose attack
+  vector is local or physical, since they are not in that path; the rationale records that they
+  were not counted. For a denial-of-service-only CVE they are credited with rate limiting and
+  request filtering.
 
 ### Added
+
+- Inventory `policy` block: `issue_types` puts other issue types (licence) Out of scope, and
+  `priority_severities` marks rows of other scanner severities 'Not prioritised' while still
+  judging them. A Priority column appears on every sheet, Engineering - fix lists non-priority
+  rows last, and the JSON summary has `by_judgment_priority`.
 
 - Reachability now uses the scanner's own call-graph analysis when the export carries
   it, such as Snyk's `REACHABILITY` column. It is detected automatically, with no flag. "No path found" discounts

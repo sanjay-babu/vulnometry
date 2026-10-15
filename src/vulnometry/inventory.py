@@ -76,6 +76,61 @@ class SlaPolicy:
         return f"{windows}, the same for every asset."
 
 
+SEVERITY_NAMES = ("critical", "high", "medium", "low")
+
+
+@dataclass
+class TriagePolicy:
+    """Which scanner rows the organisation acts on, set in the inventory::
+
+        policy:
+          issue_types: [vulnerability]                   # other types (licence, ...) are Out of scope
+          priority_severities: [critical, high, medium]  # other scanner severities are not prioritised
+
+    Both are empty by default: every row is in scope and every severity is a priority. A row
+    outside the priority severities is still judged on exposure like any other; it is only
+    marked 'Not prioritised' and listed after the priority rows for engineering, unless the
+    CVE is exploited in the wild.
+    """
+
+    issue_types: list[str] = field(default_factory=list)
+    priority_severities: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, raw) -> TriagePolicy:
+        if not raw:
+            return cls()
+        if not isinstance(raw, dict):
+            raise ValueError("'policy' should be a mapping with 'issue_types' and/or 'priority_severities'")
+
+        def names(key: str) -> list[str]:
+            value = raw.get(key) or []
+            if isinstance(value, str):
+                value = [value]
+            return [str(v).strip().lower() for v in value if str(v).strip()]
+
+        severities = names("priority_severities")
+        unknown = [s for s in severities if s not in SEVERITY_NAMES]
+        if unknown:
+            raise ValueError(f"policy.priority_severities: unknown severity {unknown[0]!r} "
+                             f"({', '.join(SEVERITY_NAMES)})")
+        return cls(issue_types=names("issue_types"), priority_severities=severities)
+
+    def in_scope(self, issue_type: str) -> bool:
+        kind = (issue_type or "").strip().lower()
+        if not self.issue_types or not kind:
+            return True
+        # 'licence' and 'license' are the same issue type
+        return kind.replace("licence", "license") in {t.replace("licence", "license") for t in self.issue_types}
+
+    def prioritised(self, scanner_severity: str) -> bool:
+        band = (scanner_severity or "").strip().lower()
+        return not self.priority_severities or band not in SEVERITY_NAMES or band in self.priority_severities
+
+    def to_dict(self) -> dict:
+        return {"issue_types": self.issue_types, "priority_severities": self.priority_severities}
+
+
 @dataclass
 class AssetProfile:
     """One place you run something."""
@@ -184,6 +239,7 @@ class Inventory:
     default_owner: str = ""
     source_path: str = ""
     sla: SlaPolicy = field(default_factory=SlaPolicy)
+    policy: TriagePolicy = field(default_factory=TriagePolicy)
 
 
     @classmethod
@@ -211,6 +267,7 @@ class Inventory:
             default_owner=data.get("default_owner", ""),
             source_path=source_path,
             sla=SlaPolicy.from_dict(data.get("sla")),
+            policy=TriagePolicy.from_dict(data.get("policy")),
         )
 
     @classmethod

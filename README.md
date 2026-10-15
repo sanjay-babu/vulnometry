@@ -146,6 +146,19 @@ sla:
 
 The Method sheet of the workbook states which policy was applied.
 
+A `policy` block narrows what the assessment covers and what engineering is asked to prioritise:
+
+```yaml
+policy:
+  issue_types: [vulnerability]                   # licence and other issue types become "Out of scope"
+  priority_severities: [critical, high, medium]  # other scanner severities are still judged, but marked
+                                                 # "Not prioritised" and listed last for engineering
+```
+
+A row outside the priority severities is still scored and judged Fix, Schedule, Accept or Not
+analysed; only its place in the queue changes. A CVE in CISA KEV is always a priority. Out of scope
+rows stay on Findings, so every scanner row is still accounted for, but appear on no hand-off sheet.
+
 Every assessment carries the reasoning that produced it, so you can see which feed contributed
 what. Run `vulnometry measure CVE-2021-44228 --asset checkout-api` for the long form.
 

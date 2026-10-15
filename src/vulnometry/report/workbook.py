@@ -14,7 +14,15 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from ..assessment import JUDGMENT_ORDER, NOT_ANALYSED, export_rows, suppression
+from ..assessment import (
+    JUDGMENT_ORDER,
+    NOT_ANALYSED,
+    NOT_PRIORITISED,
+    OUT_OF_SCOPE,
+    export_rows,
+    suppression,
+)
+from ..inventory import TriagePolicy
 from ..schema import Assessment
 
 VERDICT_FILL = {
@@ -33,6 +41,8 @@ VERDICT_FONT = {
 }
 NOT_ANALYSED_FILL = PatternFill("solid", fgColor="D6EAF8")
 NOT_ANALYSED_FONT = Font(color="1B4F72", bold=True)
+OUT_OF_SCOPE_FILL = PatternFill("solid", fgColor="EAEDED")
+OUT_OF_SCOPE_FONT = Font(color="7F8C8D", italic=True)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3A53")
 HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
@@ -47,6 +57,7 @@ _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 _BANDS = ["Critical", "High", "Medium", "Low", "Other"]
 _URL_COLUMNS = {"Project URL", "Issue URL"}
 _PAINTED = {"Judgment", "Verdict"}
+_DUE = ("Fix", "Schedule")
 _WRAPPED = {"Reason", "Rationale", "Directive", "Evidence gaps", "Reopen triggers"}
 
 REOPEN_DEFAULT = ("EPSS >= 0.10  |  added to CISA KEV  |  a working public exploit appears  |  "
@@ -75,10 +86,11 @@ def _cvss(item: Assessment):
 FIELDS = {
     "Export row": lambda r: r["row"] or "",
     "Judgment": lambda r: r["judgment"],
+    "Priority": lambda r: r.get("priority", ""),
     "Verdict": lambda r: r["verdict"],
     "BEI": lambda r: _item(r, lambda i: i.exposure.index),
-    "Due by": lambda r: _item(r, lambda i: i.due_by) if r["analysed"] else "",
-    "SLA days": lambda r: _item(r, lambda i: i.sla_days) if r["analysed"] else "",
+    "Due by": lambda r: _item(r, lambda i: i.due_by) if r["judgment"] in _DUE else "",
+    "SLA days": lambda r: _item(r, lambda i: i.sla_days) if r["judgment"] in _DUE else "",
     "Scanner severity": lambda r: r["scanner_severity"],
     "CVE": lambda r: ", ".join(r["cves"]),
     "Issue ID": lambda r: r["issue_id"],
@@ -117,9 +129,9 @@ FIELDS = {
     "Assessed (UTC)": lambda r: _item(r, lambda i: i.measured_at),
     "Rationale": lambda r: r["reason"],
     "Reason": lambda r: r["reason"],
-    "Directive": lambda r: _item(r, lambda i: i.directive) if r["analysed"] else (
+    "Directive": lambda r: r.get("directive") or (_item(r, lambda i: i.directive) if r["analysed"] else (
         "Map this project to an asset in the inventory and re-run for a real verdict. Until then, "
-        "triage it on the scanner's severity." if r["item"] is not None else "Triage on the scanner's severity."),
+        "triage it on the scanner's severity." if r["item"] is not None else "Triage on the scanner's severity.")),
     "Decision": lambda r: ("Accept risk; suppress in scanner" if suppression(r)[0]
                            else f"Accept risk; {suppression(r)[1]}"),
     "Suppress in scanner": lambda r: "Yes" if suppression(r)[0] else suppression(r)[1][:1].upper() + suppression(r)[1][1:],
@@ -133,7 +145,7 @@ FIELDS = {
     "Ticket": lambda r: "",
 }
 
-IDENTITY = [("Export row", 8), ("Judgment", 13), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
+IDENTITY = [("Export row", 8), ("Judgment", 13), ("Priority", 16), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
             ("Scanner severity", 11), ("Issue type", 13), ("CVE", 18), ("Issue ID", 30), ("Title", 32),
             ("Project", 30),
             ("Target", 24), ("Asset", 24), ("Owner", 26)]
@@ -188,6 +200,8 @@ def _paint(cell, label: str) -> None:
         cell.fill, cell.font = VERDICT_FILL[label], VERDICT_FONT[label]
     elif label == NOT_ANALYSED:
         cell.fill, cell.font = NOT_ANALYSED_FILL, NOT_ANALYSED_FONT
+    elif label == OUT_OF_SCOPE:
+        cell.fill, cell.font = OUT_OF_SCOPE_FILL, OUT_OF_SCOPE_FONT
 
 
 def _write_records(sheet, header_row: int, columns, records: list[dict]) -> None:
@@ -260,6 +274,7 @@ def _verdict_groups(records: list[dict]) -> list[tuple[str, list[dict]]]:
         ("Not analysed (insufficient data)", [r for r in records if r["why_not"] == "Insufficient data"]),
         ("Not analysed (licence issue)", [r for r in records if r["why_not"] == "Licence issue"]),
         ("Not analysed (no CVE)", [r for r in records if r["why_not"] == "No CVE identifier"]),
+        ("Out of scope (issue type)", [r for r in records if r["judgment"] == OUT_OF_SCOPE]),
     ]
 
 
@@ -300,9 +315,12 @@ def _engineering_sheet(workbook: Workbook, records: list[dict]) -> None:
     groups = [g for g in _verdict_groups(records) if g[0] in ("Contain", "Remediate", "Schedule")
               or g[0].startswith(NOT_ANALYSED)]
     header_row = _count_table(sheet, 4, groups) + 1
-    ordered = sorted(fix, key=lambda r: (_item(r, lambda i: i.due_by) or "9999-12-31",
+    # rows the policy does not prioritise (e.g. Low) come after every priority row
+    ordered = sorted(fix, key=lambda r: (r.get("priority", "").startswith(NOT_PRIORITISED),
+                                         _item(r, lambda i: i.due_by) or "9999-12-31",
                                          -_item(r, lambda i: i.exposure.index, 0)))
-    ordered += sorted(unjudged, key=lambda r: (_SEVERITY_ORDER.get(r["scanner_severity"], 4), r["row"] or 0))
+    ordered += sorted(unjudged, key=lambda r: (r.get("priority", "").startswith(NOT_PRIORITISED),
+                                               _SEVERITY_ORDER.get(r["scanner_severity"], 4), r["row"] or 0))
     _write_records(sheet, header_row, ENGINEERING_COLUMNS, ordered)
 
 
@@ -424,6 +442,21 @@ def _call_path(items: list[Assessment]) -> str:
             "and the inventory.")
 
 
+def _policy_text(summary: dict | None) -> str:
+    policy = TriagePolicy.from_dict((summary or {}).get("policy"))
+    parts = []
+    if policy.issue_types:
+        parts.append(f"Issue types in scope: {', '.join(policy.issue_types)}; rows of any other type (e.g. "
+                     "licence) are 'Out of scope' and are on no hand-off sheet.")
+    if policy.priority_severities:
+        parts.append(f"Priority severities: {', '.join(s.title() for s in policy.priority_severities)}. A row the "
+                     "scanner rates lower is still judged on exposure (Fix, Schedule, Accept or Not analysed) but "
+                     "is marked 'Not prioritised' and listed after the priority rows on 'Engineering - fix', "
+                     "unless the CVE is in CISA KEV (exploited in the wild).")
+    return " ".join(parts) or ("None set: every row is in scope and every severity is a priority. Set "
+                               "'policy.issue_types' and 'policy.priority_severities' in the inventory to apply one.")
+
+
 def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | None) -> None:
     sheet = workbook.create_sheet("Method")
     sheet.column_dimensions["A"].width = 24
@@ -444,7 +477,10 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
         ("Schedule", "Queue for the next planned maintenance window."),
         ("Accept", "No action warranted. Record the decision and move on."),
         ("Judgment", "Per scanner row: Fix (Contain or Remediate), Schedule, Accept, or Not analysed when there was "
-                     "not enough context to judge it (no inventory match, or no CVE)."),
+                     "not enough context to judge it (no inventory match, too little data to accept, or no CVE). "
+                     "Every in-scope row is judged on exposure, whatever its severity; 'Priority' then applies the "
+                     "policy below."),
+        ("Policy", _policy_text(summary)),
         ("", ""),
         ("Due dates", (f"From the verdict: {summary['sla_policy']} Set in the inventory's 'sla' block."
                        if summary and summary.get("sla_policy") else
@@ -540,7 +576,8 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
 
 def build_workbook(items: list[Assessment], path: str | Path, summary: dict | None = None) -> Path:
     path = Path(path)
-    records = export_rows(items, ((summary or {}).get("not_scored") or {}).get("rows"))
+    records = export_rows(items, ((summary or {}).get("not_scored") or {}).get("rows"),
+                          TriagePolicy.from_dict((summary or {}).get("policy")))
     workbook = Workbook()
     _findings_sheet(workbook, records)
     _manual_review_sheet(workbook, records)
