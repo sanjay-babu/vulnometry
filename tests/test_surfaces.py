@@ -331,7 +331,7 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
     assert workbook.sheetnames == ["Findings", "Manual review", "Engineering - fix", "DevSecOps - suppress",
-                                   "Action Plan", "Accepted", "By Owner", "Method"]
+                                   "DevSecOps - until fixable", "Action Plan", "Accepted", "By Owner", "Method"]
     rows = _table(workbook["Findings"], ["CVE", "Verdict", "Judgment"])
     assert rows[0] == {"CVE": "CVE-2021-44228", "Verdict": "Contain", "Judgment": "Fix"}
     assert workbook["Findings"].auto_filter.ref
@@ -693,3 +693,35 @@ def test_a_score_just_under_a_threshold_is_never_shown_rounded_up_to_it():
     measure = ExposureMeasure(index=149.8, verdict="Accept", threat=0.1, reachability=0.3, consequence=0.9,
                               confidence="high")
     assert "BEI 149.8" in Assessment(cve_id="CVE-2026-1", exposure=measure).one_line()
+
+
+def test_a_schedule_row_with_no_fix_anywhere_waits_in_the_scanner_instead_of_the_engineering_queue(tmp_path):
+    from openpyxl import load_workbook
+
+    from vulnometry.schema import ConfirmedExploitation
+
+    items, summary = _snyk_like_rows()
+    url = "https://scanner.example/org/o/project/p9"
+    items += [
+        Assessment(cve_id="CVE-2026-6001", asset="checkout-api", scanner_severity="High", due_by="2027-02-01",
+                   source_row=8, issue_url=url + "#issue-SNYK-JS-X-1", issue_id="SNYK-JS-X-1",
+                   scanner_fixability="No Fix Supported", fixes_checked=True,
+                   exposure=ExposureMeasure(index=200, verdict="Schedule", confidence="high")),
+        Assessment(cve_id="CVE-2026-6002", asset="checkout-api", scanner_severity="High", due_by="2027-02-01",
+                   source_row=9, scanner_fixability="No Fix Supported", fixes_checked=True,
+                   exploitation=ConfirmedExploitation(confirmed=True),
+                   exposure=ExposureMeasure(index=200, verdict="Schedule", confidence="high")),
+        Assessment(cve_id="CVE-2026-6003", asset="checkout-api", scanner_severity="High", due_by="2027-02-01",
+                   source_row=10, scanner_fixability="No Fix Supported", fixes=["x 1.2"], fixes_checked=True,
+                   exposure=ExposureMeasure(index=200, verdict="Schedule", confidence="high")),
+    ]
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    parked = {r["Export row"]: r for r in _table(workbook["DevSecOps - until fixable"],
+                                                 ["Export row", "Ignore type", "Ignore reason"])}
+    assert set(parked) == {8}, "KEV is never parked, and a published fixed version means upgrade"
+    assert parked[8]["Ignore type"] == "temporary-ignore, until fixable"
+    assert parked[8]["Ignore reason"].startswith("No fix available on")
+    engineering = {r["Export row"] for r in _table(workbook["Engineering - fix"], ["Export row"])}
+    assert 8 not in engineering and {9, 10, 4} <= engineering, "missing fix data alone never parks a row"
+    by_row = {r["Export row"]: r for r in _table(workbook["Findings"], ["Export row", "Judgment"])}
+    assert by_row[8]["Judgment"] == "Schedule", "parking it does not change the judgment"

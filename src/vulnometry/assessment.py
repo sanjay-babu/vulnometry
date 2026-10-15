@@ -584,6 +584,21 @@ def _apply_policy(rec: dict, policy) -> None:
         rec["priority"] = f"{NOT_PRIORITISED} ({rec['scanner_severity']})"
 
 
+def awaiting_fix(rec: dict) -> bool:
+    """A Schedule row with nothing to upgrade to: no fixed version in the advisories, and the scanner
+    (when it says) offers no fix either. Its risk stands, but there is no change to make yet, so it is
+    suppressed in the scanner until a fix is published rather than queued for engineering. Rows judged
+    Fix, and anything exploited in the wild, are never parked this way."""
+    item = rec.get("item")
+    if rec.get("judgment") != "Schedule" or item is None or not rec.get("analysed"):
+        return False
+    if item.exploitation.confirmed or item.fixes or not item.fixes_checked:
+        return False
+    # Both sources must agree: the advisories name no fixed version, and the scanner says plainly that
+    # it has none. Missing fix data is not evidence that no fix exists.
+    return "no fix" in (item.scanner_fixability or "").strip().lower()
+
+
 def suppression(rec: dict) -> tuple[bool, str]:
     """Can an accepted row be suppressed in the scanner, or should it stay open while accepted?
 

@@ -32,6 +32,11 @@ Exposure model `bei-1.3`.
 
 ### Added
 
+- A "DevSecOps - until fixable" sheet: rows judged Schedule where the advisories name no fixed
+  version and the scanner says it has no fix. The judgment stays Schedule; the row is suppressed
+  in the scanner until a fix is published (Snyk's disregardIfFixable), with the review date as a
+  backstop, and leaves "Engineering - fix". Fix rows and CISA KEV are never parked; missing fix data
+  alone never parks a row.
 - Acceptance guardrails, both about exploitation. The index is unchanged, but the verdict is raised
   to a floor, and the rationale states why and what the index alone gave: CISA KEV is at least
   Remediate, and EPSS of 10% or more (the level at which an accepted risk is reopened) is at least
