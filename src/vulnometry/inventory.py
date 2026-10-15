@@ -38,10 +38,12 @@ class SlaPolicy:
         sla:
           days: {Contain: 10, Remediate: 45, Schedule: 100}
           scale: false      # the same window for every tier, regime and environment
+          review_days: 90   # accepted risks are re-reviewed (and scanner suppressions expire) after this
     """
 
     days: dict[str, int] = field(default_factory=lambda: dict(BASE_SLA))
     scale: bool = True
+    review_days: int = 90
 
     @classmethod
     def from_dict(cls, raw) -> SlaPolicy:
@@ -57,11 +59,14 @@ class SlaPolicy:
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise ValueError(f"sla.days.{name} should be a whole number of days, got {value!r}")
             days[name] = value
-        return cls(days=days, scale=bool(raw.get("scale", True)))
+        review = raw.get("review_days", 90)
+        if not isinstance(review, int) or isinstance(review, bool) or review < 1:
+            raise ValueError(f"sla.review_days should be a whole number of days, got {review!r}")
+        return cls(days=days, scale=bool(raw.get("scale", True)), review_days=review)
 
     @property
     def is_default(self) -> bool:
-        return self.days == BASE_SLA and self.scale
+        return self.days == BASE_SLA and self.scale and self.review_days == 90
 
     def describe(self) -> str:
         windows = " · ".join(f"{v} {self.days[v]} days" for v in ("Contain", "Remediate", "Schedule"))
@@ -69,6 +74,69 @@ class SlaPolicy:
             return (f"{windows}, scaled by the asset: tier 1 halves the window, tier 3 takes 1.75x, "
                     "regulated systems take 60% of it, production takes 80%.")
         return f"{windows}, the same for every asset."
+
+
+SEVERITY_NAMES = ("critical", "high", "medium", "low")
+
+
+@dataclass
+class TriagePolicy:
+    """Which scanner rows the organisation acts on, set in the inventory::
+
+        policy:
+          issue_types: [vulnerability]                   # other types (licence, ...) are Out of scope
+          priority_severities: [critical, high, medium]  # other scanner severities are not prioritised
+          suppress_accepted: safe                         # or 'all': suppress every Accept in the scanner
+
+    Both are empty by default: every row is in scope and every severity is a priority. A row
+    outside the priority severities is still judged on exposure like any other; it is only
+    marked 'Not prioritised' and listed after the priority rows for engineering, unless the
+    CVE is exploited in the wild.
+    """
+
+    issue_types: list[str] = field(default_factory=list)
+    priority_severities: list[str] = field(default_factory=list)
+    # 'safe' keeps an accepted row open in the scanner when the scanner's own evidence argues against
+    # hiding it (call path, mature exploit); 'all' suppresses every accepted row and notes that evidence.
+    suppress_accepted: str = "safe"
+
+    @classmethod
+    def from_dict(cls, raw) -> TriagePolicy:
+        if not raw:
+            return cls()
+        if not isinstance(raw, dict):
+            raise ValueError("'policy' should be a mapping with 'issue_types' and/or 'priority_severities'")
+
+        def names(key: str) -> list[str]:
+            value = raw.get(key) or []
+            if isinstance(value, str):
+                value = [value]
+            return [str(v).strip().lower() for v in value if str(v).strip()]
+
+        severities = names("priority_severities")
+        unknown = [s for s in severities if s not in SEVERITY_NAMES]
+        if unknown:
+            raise ValueError(f"policy.priority_severities: unknown severity {unknown[0]!r} "
+                             f"({', '.join(SEVERITY_NAMES)})")
+        suppress = str(raw.get("suppress_accepted") or "safe").strip().lower()
+        if suppress not in ("safe", "all"):
+            raise ValueError(f"policy.suppress_accepted: {suppress!r} (safe or all)")
+        return cls(issue_types=names("issue_types"), priority_severities=severities, suppress_accepted=suppress)
+
+    def in_scope(self, issue_type: str) -> bool:
+        kind = (issue_type or "").strip().lower()
+        if not self.issue_types or not kind:
+            return True
+        # 'licence' and 'license' are the same issue type
+        return kind.replace("licence", "license") in {t.replace("licence", "license") for t in self.issue_types}
+
+    def prioritised(self, scanner_severity: str) -> bool:
+        band = (scanner_severity or "").strip().lower()
+        return not self.priority_severities or band not in SEVERITY_NAMES or band in self.priority_severities
+
+    def to_dict(self) -> dict:
+        return {"issue_types": self.issue_types, "priority_severities": self.priority_severities,
+                "suppress_accepted": self.suppress_accepted}
 
 
 @dataclass
@@ -179,6 +247,7 @@ class Inventory:
     default_owner: str = ""
     source_path: str = ""
     sla: SlaPolicy = field(default_factory=SlaPolicy)
+    policy: TriagePolicy = field(default_factory=TriagePolicy)
 
 
     @classmethod
@@ -206,6 +275,7 @@ class Inventory:
             default_owner=data.get("default_owner", ""),
             source_path=source_path,
             sla=SlaPolicy.from_dict(data.get("sla")),
+            policy=TriagePolicy.from_dict(data.get("policy")),
         )
 
     @classmethod

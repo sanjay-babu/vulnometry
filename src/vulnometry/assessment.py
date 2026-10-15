@@ -8,7 +8,8 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from .config import settings
-from .exposure import directive_for, measure_exposure
+from .evidence import run_date, run_timestamp
+from .exposure import apply_floors, directive_for, measure_exposure
 from .feeds import advisories as adv_feed
 from .feeds import catalogue as kev_feed
 from .feeds import probability as epss_feed
@@ -50,14 +51,42 @@ def _dedupe(bulletins):
     return unique
 
 
-def _fix_versions(bulletins) -> list[str]:
+_SNYK_ID = re.compile(r"^SNYK-[A-Z0-9]+-([A-Z0-9]+)-\d+$")
+
+
+def _package_token(issue_id: str) -> str:
+    """The package a scanner issue is about, when its identifier names it (SNYK-JS-AXIOS-123 -> AXIOS)."""
+    match = _SNYK_ID.match((issue_id or "").strip().upper())
+    return match.group(1) if match else ""
+
+
+def _same_package(component: str, token: str) -> bool:
+    name = re.sub(r"[^A-Z0-9]", "", (component or "").upper())
+    return bool(name) and (name == token or name.startswith(token))
+
+
+_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+_CWE = re.compile(r"CWE-\d+")
+
+
+def _fix_versions(bulletins, issue_id: str = "") -> list[str]:
+    """Fixed versions from the advisories. When the scanner's issue names a package, only that
+    package's fixes: one CVE can span several packages, and a row is about one of them."""
+    token = _package_token(issue_id)
+    remedies = [r for b in bulletins for r in b.remedies if r.fixed_in]
+    if token:
+        mine = [r for r in remedies if _same_package(r.component, token)]
+        remedies = mine or remedies
     fixes: list[str] = []
-    for bulletin in bulletins:
-        for remedy in bulletin.remedies:
-            if remedy.fixed_in:
-                label = f"{remedy.component} {remedy.fixed_in}" if remedy.component else remedy.fixed_in
-                if label not in fixes:
-                    fixes.append(label)
+    for remedy in remedies:
+        # A git commit from a source-repository range is not a version anyone can upgrade to.
+        versions = [v.strip() for v in remedy.fixed_in.split(",") if v.strip() and not _COMMIT.match(v.strip())]
+        if not versions:
+            continue
+        fixed_in = ", ".join(versions)
+        label = f"{remedy.component} {fixed_in}" if remedy.component else fixed_in
+        if label not in fixes:
+            fixes.append(label)
     return fixes
 
 
@@ -72,6 +101,9 @@ async def assess_finding(
     scanner_severity: str = "",
     scanner: str = "",
     code_reachability: str = "",
+    scanner_fixability: str = "",
+    issue_id: str = "",
+    scanner_cwe: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -113,10 +145,13 @@ async def assess_finding(
     artifacts = list(resolved.get("artifacts") or [])
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
-    measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
-    fixes = _fix_versions(bulletins)
+    # The scanner's CWE for this row is more specific than the CVE's (one CVE can list several).
+    cwe_ids = _CWE.findall(scanner_cwe.upper()) or list(weakness.cwe_ids)
+    measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability, cwe_ids)
+    measure = apply_floors(measure, exploitation, probability, asset)
+    fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
-    due_by = asset.due_date(measure.verdict, policy=policy)
+    due_by = asset.due_date(measure.verdict, from_date=run_date(), policy=policy)
 
     return Assessment(
         cve_id=cve_id,
@@ -142,10 +177,13 @@ async def assess_finding(
         source_host=host,
         source_component=component,
         code_reachability=code_reachability,
-        directive=directive_for(measure, exploitation, fixes, asset, due_by),
+        directive=directive_for(measure, exploitation, fixes, asset, due_by,
+                                fixes_checked=lens in ("full", "forensic"), scanner_fixability=scanner_fixability),
+        fixes_checked=lens in ("full", "forensic"),
+        scanner_fixability=scanner_fixability,
         gaps=gaps,
         lens=lens,
-        measured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        measured_at=run_timestamp() or datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
 
 
@@ -209,6 +247,9 @@ async def assess_portfolio(
                 scanner_severity=str(row.get("raw_severity") or "").strip(),
                 scanner=str(row.get("scanner") or "").strip(),
                 code_reachability=row["code_reachability"],
+                scanner_fixability=str(row.get("fixability") or "").strip(),
+                issue_id=row.get("issue_id", "") or issue_id_from(row.get("issue_url", "")),
+                scanner_cwe=str(row.get("cwe") or ""),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))
@@ -220,6 +261,8 @@ async def assess_portfolio(
         result.issue_url = row.get("issue_url", "")
         result.issue_id = row.get("issue_id", "") or issue_id_from(result.issue_url)
         result.source_title = row.get("title", "")
+        result.issue_type = row.get("issue_type", "")
+        result.scanner_exploit_maturity = row.get("exploit_maturity", "")
     return sorted(results, key=lambda a: a.exposure.index, reverse=True)
 
 
@@ -417,15 +460,19 @@ def not_scored_summary(rows: list[dict]) -> dict:
              "title": r.get("title", ""), "reason": r.get("reason", "no CVE identifier"),
              "row": r.get("row", 0), "project_url": r.get("project_url", ""),
              "issue_url": r.get("issue_url", ""),
-             "issue_id": r.get("issue_id", "") or issue_id_from(r.get("issue_url", ""))}
+             "issue_id": r.get("issue_id", "") or issue_id_from(r.get("issue_url", "")),
+             "issue_type": r.get("issue_type", "")}
             for r in rows
         ],
     }
 
 
 NOT_ANALYSED = "Not analysed"
+OUT_OF_SCOPE = "Out of scope"
 JUDGMENT = {"Contain": "Fix", "Remediate": "Fix", "Schedule": "Schedule", "Accept": "Accept"}
-JUDGMENT_ORDER = ["Fix", "Schedule", NOT_ANALYSED, "Accept"]
+JUDGMENT_ORDER = ["Fix", "Schedule", NOT_ANALYSED, "Accept", OUT_OF_SCOPE]
+PRIORITY = "Priority"
+NOT_PRIORITISED = "Not prioritised"
 
 
 def issue_id_from(url: str) -> str:
@@ -434,13 +481,18 @@ def issue_id_from(url: str) -> str:
     return text.split("#issue-", 1)[1] if "#issue-" in text else ""
 
 
-def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | None = None) -> list[dict]:
+def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | None = None,
+                policy=None) -> list[dict]:
     """One record per row of the scanner export, each with a judgment: Fix, Schedule, Accept or Not analysed.
 
     A row listing several CVEs is judged on its worst one. Rows the model could not score (no CVE)
     and findings it could not analyse (no inventory match) are 'Not analysed', with the reason.
     Findings that came from something other than a spreadsheet have no row number and are one
     record each. When the same issue link appears on two rows, the later one notes the earlier.
+
+    ``policy`` (the inventory's TriagePolicy) then applies the organisation's rules: rows of an
+    issue type it does not cover are 'Out of scope', and rows outside the severities it prioritises
+    keep their judgment but are marked 'Not prioritised', unless the CVE is exploited in the wild.
     """
     grouped: dict[int, list[Assessment]] = {}
     records: list[dict] = []
@@ -453,16 +505,23 @@ def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | Non
         lead = max(group, key=lambda a: a.exposure.index)
         records.append(_record(row, lead, sorted({a.cve_id for a in group})))
     for r in not_scored_rows or []:
+        licence = (r.get("issue_type") or "").strip().lower().startswith("licen")
         records.append({
             "row": r.get("row", 0), "item": None, "cves": [], "scanner_severity": r.get("scanner_severity", ""),
             "title": r.get("title", ""), "project": r.get("asset", ""), "target": r.get("host", ""),
             "project_url": r.get("project_url", ""), "issue_url": r.get("issue_url", ""),
-            "issue_id": r.get("issue_id", ""), "analysed": False, "verdict": NOT_ANALYSED,
-            "judgment": NOT_ANALYSED, "why_not": "No CVE identifier",
-            "reason": "Not analysed: no CVE identifier (a licence issue or a scanner-only advisory). Exposure is "
-                      "scored per CVE, so only the scanner's severity applies.",
-            "duplicate_of": None,
+            "issue_id": r.get("issue_id", ""), "issue_type": r.get("issue_type", ""),
+            "analysed": False, "verdict": NOT_ANALYSED, "judgment": NOT_ANALYSED,
+            "why_not": "Licence issue" if licence else "No CVE identifier",
+            "reason": ("Not analysed: a licence issue, not a vulnerability, so exposure scoring does not apply. "
+                       "Review it against the licence policy." if licence else
+                       "Not analysed: no CVE identifier (a scanner-only advisory). Exposure is scored per CVE, "
+                       "so only the scanner's severity applies."),
+            "duplicate_of": None, "priority": "", "directive": "",
         })
+    if policy is not None:
+        for rec in records:
+            _apply_policy(rec, policy)
     first_seen: dict[str, int] = {}
     for rec in sorted(records, key=lambda r: r["row"] or 10**9):
         url = rec["issue_url"]
@@ -476,16 +535,95 @@ def export_rows(assessments: list[Assessment], not_scored_rows: list[dict] | Non
 
 def _record(row: int, item: Assessment, cves: list[str]) -> dict:
     analysed = item.analysed()
+    reason = item.rationale()
+    why_not = "" if analysed else "No inventory match"
+    # Accepting a risk needs the evidence to be there. Without a CVE record, an EPSS score or the
+    # asset's context (confidence below high) the low score may only reflect missing data.
+    if analysed and item.exposure.verdict == "Accept" and (item.exposure.confidence != "high" or item.gaps):
+        analysed = False
+        why_not = "Insufficient data"
+        gaps = "; ".join(item.gaps) or "the CVE record, EPSS score or asset context is incomplete"
+        reason = (f"Not analysed: not enough data to accept this risk ({gaps}; confidence "
+                  f"{item.exposure.confidence}). Check the CVE before accepting it. Provisional result: {reason}")
     return {
         "row": row, "item": item, "cves": cves, "scanner_severity": scanner_band(item.scanner_severity),
         "title": item.source_title, "project": item.source_asset, "target": item.source_host,
         "project_url": item.source_url, "issue_url": item.issue_url, "issue_id": item.issue_id,
-        "analysed": analysed,
+        "issue_type": item.issue_type, "analysed": analysed,
         "verdict": item.exposure.verdict if analysed else NOT_ANALYSED,
         "judgment": JUDGMENT.get(item.exposure.verdict, item.exposure.verdict) if analysed else NOT_ANALYSED,
-        "why_not": "" if analysed else "No inventory match",
-        "reason": item.rationale(), "duplicate_of": None,
+        "why_not": why_not, "reason": reason, "duplicate_of": None,
+        "priority": "", "directive": "",
     }
+
+
+def _severity_list(names: list[str]) -> str:
+    names = [n.title() for n in names]
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _apply_policy(rec: dict, policy) -> None:
+    """The organisation's triage rules, applied after the exposure judgment and stated in the row."""
+    rec["suppress_all"] = policy.suppress_accepted == "all"
+    if not policy.in_scope(rec.get("issue_type", "")):
+        kind = (rec.get("issue_type") or "").strip().lower() or "non-vulnerability"
+        rec.update(
+            judgment=OUT_OF_SCOPE, verdict=OUT_OF_SCOPE, analysed=False, why_not="",
+            reason=(f"Out of scope: a {kind} issue, not a vulnerability. This assessment covers "
+                    f"{_severity_list(policy.issue_types).lower()} issues only (inventory 'policy.issue_types')."),
+            directive="None in this assessment; handle under the policy that covers this issue type.",
+        )
+        return
+    item = rec.get("item")
+    if policy.prioritised(rec.get("scanner_severity", "")):
+        rec["priority"] = PRIORITY
+    elif item is not None and item.exploitation.confirmed:
+        rec["priority"] = PRIORITY
+        rec["reason"] += (f" Prioritised although the scanner rates it {rec['scanner_severity']}: it is exploited "
+                          "in the wild (CISA KEV).")
+    else:
+        rec["priority"] = f"{NOT_PRIORITISED} ({rec['scanner_severity']})"
+
+
+def awaiting_fix(rec: dict) -> bool:
+    """A Schedule row with nothing to upgrade to: no fixed version in the advisories, and the scanner
+    (when it says) offers no fix either. Its risk stands, but there is no change to make yet, so it is
+    suppressed in the scanner until the next review rather than queued for engineering. Rows judged
+    Fix, and anything exploited in the wild, are never parked this way."""
+    item = rec.get("item")
+    if rec.get("judgment") != "Schedule" or item is None or not rec.get("analysed"):
+        return False
+    if item.exploitation.confirmed or item.fixes or not item.fixes_checked:
+        return False
+    # Both sources must agree: the advisories name no fixed version, and the scanner says plainly that
+    # it has none. Missing fix data is not evidence that no fix exists.
+    return "no fix" in (item.scanner_fixability or "").strip().lower()
+
+
+def suppression(rec: dict) -> tuple[bool, str]:
+    """Can an accepted row be suppressed in the scanner, or should it stay open while accepted?
+
+    Suppressing hides a finding from everyone who works from the scanner, so it is held back
+    whenever the scanner's own evidence argues against it.
+    """
+    item = rec.get("item")
+    if rec.get("judgment") != "Accept" or item is None:
+        return False, "not accepted"
+    hold = scanner_flag(item)
+    if hold and not rec.get("suppress_all"):
+        return False, f"keep open: {hold}"
+    return True, "suppress"
+
+
+def scanner_flag(item: Assessment) -> str:
+    """Evidence that argues against hiding an accepted row in the scanner, or ""."""
+    if item.exploitation.confirmed:
+        return "exploited in the wild (CISA KEV)"
+    if item.code_reachability == "reachable":
+        return "the scanner found a call path to the vulnerable function"
+    if (item.scanner_exploit_maturity or "").strip().lower() == "mature":
+        return "the scanner reports a mature exploit"
+    return ""
 
 
 def _count_verdicts(items) -> dict:

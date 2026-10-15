@@ -26,6 +26,24 @@ _INDEX_REPOS = re.compile(
 )
 
 _WEAPONISED = re.compile(r"(metasploit|nuclei-template|msf-module|exploit-kit|weaponi[sz]ed)", re.IGNORECASE)
+# What an exploit repository says about itself. A README that merely mentions a CVE is usually a
+# project recording a dependency upgrade, not an exploit, so it is not enough on its own.
+_EXPLOIT_WORDS = re.compile(
+    r"(exploit|\bpoc\b|proof[- ]of[- ]concept|reproduc|payload|\brce\b|remote code execution|"
+    r"weaponi[sz]ed|metasploit|nuclei|attack|bypass|lab\b|vulnerable (app|environment|setup))",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_an_exploit(cve_id: str, full_name: str, description: str) -> bool:
+    """The repository is about this CVE: its name carries the ID, or its description names the CVE
+    and describes exploit material."""
+    compact = re.sub(r"[^0-9a-z]", "", cve_id.lower())
+    name = re.sub(r"[^0-9a-z]", "", (full_name or "").split("/")[-1].lower())
+    if compact in name:
+        return True
+    text = description or ""
+    return cve_id.lower() in text.lower() and bool(_EXPLOIT_WORDS.search(text))
 
 
 def _gh_headers() -> dict[str, str]:
@@ -180,23 +198,26 @@ async def ghsa_for_cve(cve_id: str) -> list[Bulletin]:
 
 
 async def exploit_artifacts(cve_id: str, limit: int = 6) -> list[ExploitArtifact]:
-    """Public exploit material on GitHub. Heuristic by nature."""
+    """Public exploit material on GitHub. Heuristic by nature.
+
+    A failed search raises, so the caller records it as an evidence gap: returning nothing would
+    read as "no exploit found", a false negative.
+    """
     cve_id = canonical_cve(cve_id)
-    try:
-        payload = await client().get_json(
-            GH_SEARCH,
-            source="github-search",
-            params={"q": f"{cve_id} in:name,description,readme", "sort": "stars", "per_page": 20},
-            headers=_gh_headers(),
-            ttl=24 * 3600,
-        )
-    except FeedError:
-        return []
+    payload = await client().get_json(
+        GH_SEARCH,
+        source="github-search",
+        params={"q": f"{cve_id} in:name,description", "sort": "stars", "per_page": 30},
+        headers=_gh_headers(),
+        ttl=24 * 3600,
+    )
 
     artifacts: list[ExploitArtifact] = []
     for repo in (payload or {}).get("items", []) or []:
         full_name = repo.get("full_name", "")
         if _INDEX_REPOS.search(full_name):
+            continue
+        if not _looks_like_an_exploit(cve_id, full_name, repo.get("description") or ""):
             continue
         blurb = f"{full_name} {repo.get('description') or ''}"
         maturity = "weaponised" if _WEAPONISED.search(blurb) else "proof-of-concept"

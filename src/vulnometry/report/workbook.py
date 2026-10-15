@@ -1,20 +1,31 @@
 """Annotated Excel output: one row per scanner row, plus the lists to act on.
 
 Findings has one row per row of the scanner export, each judged Fix, Schedule, Accept or Not
-analysed. Manual review, To fix and Accepted are filters of it; Action Plan and By Owner
+analysed. Manual review, Engineering - fix, DevSecOps - suppress and Accepted are filters of it; Action Plan and By Owner
 summarise it; Method explains it.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from ..assessment import JUDGMENT_ORDER, NOT_ANALYSED, export_rows
+from ..assessment import (
+    JUDGMENT_ORDER,
+    NOT_ANALYSED,
+    NOT_PRIORITISED,
+    OUT_OF_SCOPE,
+    awaiting_fix,
+    export_rows,
+    scanner_flag,
+    suppression,
+)
+from ..evidence import run_date
+from ..inventory import TriagePolicy
 from ..schema import Assessment
 
 VERDICT_FILL = {
@@ -33,6 +44,8 @@ VERDICT_FONT = {
 }
 NOT_ANALYSED_FILL = PatternFill("solid", fgColor="D6EAF8")
 NOT_ANALYSED_FONT = Font(color="1B4F72", bold=True)
+OUT_OF_SCOPE_FILL = PatternFill("solid", fgColor="EAEDED")
+OUT_OF_SCOPE_FONT = Font(color="7F8C8D", italic=True)
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3A53")
 HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
@@ -47,6 +60,7 @@ _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 _BANDS = ["Critical", "High", "Medium", "Low", "Other"]
 _URL_COLUMNS = {"Project URL", "Issue URL"}
 _PAINTED = {"Judgment", "Verdict"}
+_DUE = ("Fix", "Schedule")
 _WRAPPED = {"Reason", "Rationale", "Directive", "Evidence gaps", "Reopen triggers"}
 
 REOPEN_DEFAULT = ("EPSS >= 0.10  |  added to CISA KEV  |  a working public exploit appears  |  "
@@ -75,13 +89,15 @@ def _cvss(item: Assessment):
 FIELDS = {
     "Export row": lambda r: r["row"] or "",
     "Judgment": lambda r: r["judgment"],
+    "Priority": lambda r: r.get("priority", ""),
     "Verdict": lambda r: r["verdict"],
     "BEI": lambda r: _item(r, lambda i: i.exposure.index),
-    "Due by": lambda r: _item(r, lambda i: i.due_by) if r["analysed"] else "",
-    "SLA days": lambda r: _item(r, lambda i: i.sla_days) if r["analysed"] else "",
+    "Due by": lambda r: _item(r, lambda i: i.due_by) if r["judgment"] in _DUE else "",
+    "SLA days": lambda r: _item(r, lambda i: i.sla_days) if r["judgment"] in _DUE else "",
     "Scanner severity": lambda r: r["scanner_severity"],
     "CVE": lambda r: ", ".join(r["cves"]),
     "Issue ID": lambda r: r["issue_id"],
+    "Issue type": lambda r: r.get("issue_type", ""),
     "Title": lambda r: r["title"],
     "Project": lambda r: r["project"],
     "Target": lambda r: r["target"],
@@ -108,16 +124,23 @@ FIELDS = {
     "Ransomware": lambda r: _item(r, lambda i: "Yes" if i.exploitation.ransomware_linked else ""),
     "Component": lambda r: _item(r, lambda i: i.source_component),
     "Fixed in": lambda r: _item(r, lambda i: ", ".join(i.fixes[:3])),
+    "Scanner fixability": lambda r: _item(r, lambda i: i.scanner_fixability),
+    "Scanner exploit maturity": lambda r: _item(r, lambda i: i.scanner_exploit_maturity),
     "Confidence": lambda r: _item(r, lambda i: i.exposure.confidence),
     "Evidence gaps": lambda r: _item(r, lambda i: " | ".join(i.gaps) or "none"),
     "Model": lambda r: _item(r, lambda i: i.exposure.model_version),
     "Assessed (UTC)": lambda r: _item(r, lambda i: i.measured_at),
     "Rationale": lambda r: r["reason"],
     "Reason": lambda r: r["reason"],
-    "Directive": lambda r: _item(r, lambda i: i.directive) if r["analysed"] else (
+    "Directive": lambda r: r.get("directive") or (_item(r, lambda i: i.directive) if r["analysed"] else (
         "Map this project to an asset in the inventory and re-run for a real verdict. Until then, "
-        "triage it on the scanner's severity." if r["item"] is not None else "Triage on the scanner's severity."),
-    "Decision": lambda r: "Accept risk / suppress in scanner",
+        "triage it on the scanner's severity." if r["item"] is not None else "Triage on the scanner's severity.")),
+    "Decision": lambda r: ("Accept risk; suppress in scanner" if suppression(r)[0]
+                           else f"Accept risk; {suppression(r)[1]}"),
+    "Suppress in scanner": lambda r: "Yes" if suppression(r)[0] else suppression(r)[1][:1].upper() + suppression(r)[1][1:],
+    "Suppress until": lambda r: r.get("suppress_until", ""),
+    "Ignore reason": lambda r: r.get("ignore_reason", ""),
+    "Ignore type": lambda r: r.get("ignore_type", "temporary-ignore"),
     "Decided by": lambda r: "",
     "Decision date": lambda r: "",
     "Review by": lambda r: "",
@@ -125,8 +148,9 @@ FIELDS = {
     "Ticket": lambda r: "",
 }
 
-IDENTITY = [("Export row", 8), ("Judgment", 13), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
-            ("Scanner severity", 11), ("CVE", 18), ("Issue ID", 30), ("Title", 32), ("Project", 30),
+IDENTITY = [("Export row", 8), ("Judgment", 13), ("Priority", 16), ("Verdict", 13), ("BEI", 8), ("Due by", 12),
+            ("Scanner severity", 11), ("Issue type", 13), ("CVE", 18), ("Issue ID", 30), ("Title", 32),
+            ("Project", 30),
             ("Target", 24), ("Asset", 24), ("Owner", 26)]
 LINKS = [("Project URL", 30), ("Issue URL", 30)]
 
@@ -134,15 +158,27 @@ FINDINGS_COLUMNS = [
     *IDENTITY, ("Internet", 10), ("Analysis", 13), ("Not analysed because", 18), ("Duplicate of row", 9),
     *LINKS, ("SLA days", 9), ("Threat", 9), ("Reach", 9), ("Code path", 11), ("Consequence", 12),
     ("CVSS", 7), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 6), ("Ransomware", 11), ("Component", 22),
-    ("Fixed in", 28), ("Confidence", 11), ("Business unit", 18), ("Environment", 13),
+    ("Fixed in", 28), ("Scanner fixability", 14), ("Scanner exploit maturity", 14), ("Confidence", 11),
+    ("Business unit", 18),
+    ("Environment", 13),
     ("Rationale", 90), ("Directive", 60),
 ]
 REVIEW_COLUMNS = [*IDENTITY, ("Not analysed because", 18), *LINKS, ("Reason", 90), ("Directive", 60)]
-FIX_COLUMNS = [*IDENTITY, *LINKS, ("Reason", 90), ("Directive", 60)]
+FIX_COLUMNS = [*IDENTITY, ("Fixed in", 30), ("Scanner fixability", 14), *LINKS, ("Reason", 90),
+               ("Directive", 60)]
+ENGINEERING_COLUMNS = [*IDENTITY, ("Not analysed because", 18), ("Fixed in", 30), ("Scanner fixability", 14),
+                       *LINKS, ("Reason", 90), ("Directive", 60)]
+SUPPRESS_COLUMNS = [
+    ("Export row", 8), ("Issue ID", 32), ("Issue URL", 34), ("Project", 30), ("Target", 24), ("Project URL", 30),
+    ("Scanner severity", 11), ("Issue type", 13), ("CVE", 18), ("BEI", 8), ("Asset", 24), ("Owner", 26),
+    ("Ignore type", 15), ("Suppress until", 13), ("Ignore reason", 70), ("Rationale", 90),
+    ("Decided by", 16), ("Decision date", 14), ("Ticket", 16),
+]
 ACCEPT_COLUMNS = [
-    *IDENTITY, *LINKS, ("Threat", 8), ("Reach", 8), ("Code path", 10), ("Consequence", 9), ("Internet", 11),
+    *IDENTITY, ("Suppress in scanner", 26), *LINKS, ("Threat", 8), ("Reach", 8), ("Code path", 10), ("Consequence", 9), ("Internet", 11),
     ("Tier", 6), ("Data class", 14), ("EPSS %", 9), ("EPSS date", 12), ("KEV", 9), ("CVSS", 7),
-    ("Fixed in", 22), ("Confidence", 11), ("Rationale", 95), ("Evidence gaps", 40), ("Model", 10),
+    ("Fixed in", 22), ("Scanner fixability", 14), ("Scanner exploit maturity", 14), ("Confidence", 11),
+    ("Rationale", 95), ("Evidence gaps", 40), ("Model", 10),
     ("Assessed (UTC)", 22), ("Decision", 26), ("Decided by", 16), ("Decision date", 14), ("Review by", 14),
     ("Reopen triggers", 60), ("Ticket", 16),
 ]
@@ -167,6 +203,8 @@ def _paint(cell, label: str) -> None:
         cell.fill, cell.font = VERDICT_FILL[label], VERDICT_FONT[label]
     elif label == NOT_ANALYSED:
         cell.fill, cell.font = NOT_ANALYSED_FILL, NOT_ANALYSED_FONT
+    elif label == OUT_OF_SCOPE:
+        cell.fill, cell.font = OUT_OF_SCOPE_FILL, OUT_OF_SCOPE_FONT
 
 
 def _write_records(sheet, header_row: int, columns, records: list[dict]) -> None:
@@ -236,7 +274,10 @@ def _verdict_groups(records: list[dict]) -> list[tuple[str, list[dict]]]:
         ("Schedule", [r for r in records if r["verdict"] == "Schedule"]),
         ("Accept", [r for r in records if r["verdict"] == "Accept"]),
         ("Not analysed (no inventory match)", [r for r in records if r["why_not"] == "No inventory match"]),
+        ("Not analysed (insufficient data)", [r for r in records if r["why_not"] == "Insufficient data"]),
+        ("Not analysed (licence issue)", [r for r in records if r["why_not"] == "Licence issue"]),
         ("Not analysed (no CVE)", [r for r in records if r["why_not"] == "No CVE identifier"]),
+        ("Out of scope (issue type)", [r for r in records if r["judgment"] == OUT_OF_SCOPE]),
     ]
 
 
@@ -244,7 +285,7 @@ def _findings_sheet(workbook: Workbook, records: list[dict]) -> None:
     sheet = workbook.active
     sheet.title = "Findings"
     _title(sheet, "Exposure assessment: one row per scanner row",
-           f"Generated {date.today().isoformat()} · {len(records)} rows · judgment per row: Fix, Schedule, Accept "
+           f"Generated {run_date().isoformat()} · {len(records)} rows · judgment per row: Fix, Schedule, Accept "
            "or Not analysed · Business Exposure Index 0-1000, higher means act sooner")
     header_row = _count_table(sheet, 4, _verdict_groups(records)) + 1
     _write_records(sheet, header_row, FINDINGS_COLUMNS, _order(records))
@@ -254,35 +295,109 @@ def _manual_review_sheet(workbook: Workbook, records: list[dict]) -> None:
     review = [r for r in records if r["judgment"] == NOT_ANALYSED]
     sheet = workbook.create_sheet("Manual review", 1)
     _title(sheet, "Manual review: rows there was not enough context to judge",
-           f"{len(review)} row(s): the project matched no asset in the inventory, or the row has no CVE. "
+           f"{len(review)} row(s): the project matched no asset in the inventory, the data was too thin to "
+           "accept the risk, the row is a licence issue, or it has no CVE. "
            "Each keeps the scanner's severity and links. Filter and hand over.")
     groups = [g for g in _verdict_groups(records) if g[0].startswith(NOT_ANALYSED)]
     header_row = _count_table(sheet, 4, groups) + 1
     _write_records(sheet, header_row, REVIEW_COLUMNS, _order(review))
 
 
-def _to_fix_sheet(workbook: Workbook, records: list[dict]) -> None:
-    fix = [r for r in records if r["judgment"] in ("Fix", "Schedule")]
-    sheet = workbook.create_sheet("To fix", 2)
-    _title(sheet, "To fix: rows judged Fix or Schedule, by due date",
-           f"{len(fix)} row(s). Fix = Contain or Remediate.")
-    groups = [g for g in _verdict_groups(records) if g[0] in ("Contain", "Remediate", "Schedule")]
+def _engineering_sheet(workbook: Workbook, records: list[dict]) -> None:
+    """For engineering: everything that is not an accepted risk. Rows to fix by due date first, then the
+    rows vulnometry could not judge, by scanner severity, so nothing unreviewed drops out of sight."""
+    fix = [r for r in records if r["judgment"] in ("Fix", "Schedule") and not awaiting_fix(r)]
+    parked = sum(1 for r in records if awaiting_fix(r))
+    unjudged = [r for r in records if r["judgment"] == NOT_ANALYSED]
+    sheet = workbook.create_sheet("Engineering - fix", 2)
+    _title(sheet, "Engineering: rows to fix, and rows not analysed",
+           f"{len(fix)} row(s) to fix, by due date: Fix = Contain or Remediate (ahead of the routine cycle), "
+           "Schedule = the next planned maintenance window."
+           + (f" {parked} Schedule row(s) with no fix published anywhere are not here: they are on "
+              "'DevSecOps - no fix yet', suppressed until the next review, which checks again for a fix." if parked else "")
+           + " Then "
+           f"{len(unjudged)} row(s) vulnometry could not judge (no inventory match, too little data, a licence "
+           "issue, or no CVE): treat these on the scanner's severity until they are analysed. 'Fixed in' is the "
+           "version to upgrade to for the package this scanner issue is about.")
+    groups = [g for g in _verdict_groups(records) if g[0] in ("Contain", "Remediate", "Schedule")
+              or g[0].startswith(NOT_ANALYSED)]
     header_row = _count_table(sheet, 4, groups) + 1
-    ordered = sorted(fix, key=lambda r: (_item(r, lambda i: i.due_by) or "9999-12-31",
+    # rows the policy does not prioritise (e.g. Low) come after every priority row
+    ordered = sorted(fix, key=lambda r: (r.get("priority", "").startswith(NOT_PRIORITISED),
+                                         _item(r, lambda i: i.due_by) or "9999-12-31",
                                          -_item(r, lambda i: i.exposure.index, 0)))
-    _write_records(sheet, header_row, FIX_COLUMNS, ordered)
+    ordered += sorted(unjudged, key=lambda r: (r.get("priority", "").startswith(NOT_PRIORITISED),
+                                               _SEVERITY_ORDER.get(r["scanner_severity"], 4), r["row"] or 0))
+    _write_records(sheet, header_row, ENGINEERING_COLUMNS, ordered)
+
+
+def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) -> None:
+    """For DevSecOps: the accepted rows to suppress in the scanner, each with its expiry and reason."""
+    accepted = [r for r in records if r["judgment"] == "Accept"]
+    rows = [r for r in accepted if suppression(r)[0]]
+    for rec in rows:
+        item = rec["item"]
+        assessed = (item.measured_at or run_date().isoformat())[:10]
+        until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
+        rec["suppress_until"] = until
+        why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
+        flag = scanner_flag(item)
+        note = (f" Suppressed under the suppress-all policy although {flag}; re-assessed at the next review."
+                if flag else "")
+        rec["ignore_reason"] = (f"Risk accepted: vulnometry {item.exposure.model_version} Accept "
+                                f"(BEI {item.exposure.index:.1f}) on {assessed}: {why}. Re-review by {until}."
+                                + note)[:500]
+    kept_open = len(accepted) - len(rows)
+    flagged = sum(1 for r in rows if scanner_flag(r["item"]))
+    sheet = workbook.create_sheet("DevSecOps - suppress", 3)
+    _title(sheet, "DevSecOps: accepted rows to suppress in the scanner",
+           f"{len(rows)} row(s) to suppress as a temporary ignore until the date shown ({review_days} days, the "
+           "next review). "
+           + (f"{kept_open} more accepted row(s) stay open in the scanner because its own evidence argues against "
+              "hiding them (call path found, mature exploit, or CISA KEV); see 'Accepted'. " if kept_open else "")
+           + (f"{flagged} of the rows to suppress carry a scanner flag (call path or mature exploit); the policy "
+              "suppresses every accepted row, and the ignore reason records the flag. " if flagged else "")
+           + "Rows judged Not analysed are never suppressed. Fill 'Decided by' and 'Decision date' when signed off.")
+    _write_records(sheet, 4, SUPPRESS_COLUMNS, _order(rows))
+
+
+def _no_fix_sheet(workbook: Workbook, records: list[dict], review_days: int) -> None:
+    """For DevSecOps: Schedule rows with no fix anywhere, to suppress until the next review."""
+    rows = [r for r in records if awaiting_fix(r)]
+    for rec in rows:
+        item = rec["item"]
+        assessed = (item.measured_at or run_date().isoformat())[:10]
+        until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
+        rec["suppress_until"] = until
+        why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
+        rec["ignore_reason"] = (f"No fix available on {assessed} (no fixed version published; scanner: "
+                                f"{item.scanner_fixability or 'none'}). Risk stands: vulnometry "
+                                f"{item.exposure.model_version} Schedule (BEI {item.exposure.index:.1f}): {why}. "
+                                f"Ignored until {until}, the next review, which checks again for a fix. Mitigate "
+                                "meanwhile where possible.")[:500]
+    sheet = workbook.create_sheet("DevSecOps - no fix yet", 4)
+    _title(sheet, "DevSecOps: rows with no fix yet, to suppress until the next review",
+           f"{len(rows)} row(s) judged Schedule for which no fixed version exists anywhere (the advisories list "
+           "none and the scanner offers no fix). The risk is not accepted: there is simply nothing to upgrade to "
+           f"yet. Suppress each as a temporary ignore until the date shown ({review_days} days, the next review); "
+           "the next run checks again and sends any that now have a fix to engineering. Rows judged Fix, and "
+           "anything in CISA KEV, are never parked here. Fill 'Decided by' and 'Decision date' when signed off.")
+    _write_records(sheet, 4, [*SUPPRESS_COLUMNS[:15], ("Directive", 60), *SUPPRESS_COLUMNS[15:]], _order(rows))
 
 
 def _accepted_sheet(workbook: Workbook, records: list[dict]) -> None:
     accepted = [r for r in records if r["judgment"] == "Accept"]
-    held_back = sum(1 for r in records if r["item"] is not None and not r["analysed"]
-                    and r["item"].exposure.verdict == "Accept")
+    held = [r for r in records if r["item"] is not None and not r["analysed"]
+            and r["item"].exposure.verdict == "Accept"]
+    no_match = sum(1 for r in held if r["why_not"] == "No inventory match")
+    thin = sum(1 for r in held if r["why_not"] == "Insufficient data")
     sheet = workbook.create_sheet("Accepted")
-    _title(sheet, "Accepted risk — rationale and sign-off",
+    _title(sheet, "Accepted risk: rationale and sign-off",
            f"{len(accepted)} row(s) judged Accept. The rationale columns are produced by the model; fill the "
            "Decision..Ticket columns and keep this as the audit record."
-           + (f" {held_back} more scored Accept only on worst-case defaults (Not analysed: no inventory "
-              "match) and are left off, so they cannot be signed off or suppressed by mistake." if held_back else ""))
+           + (f" {len(held)} more scored Accept but are left off (Not analysed: {no_match} with no inventory "
+              f"match, {thin} with too little data to accept), so they cannot be signed off or suppressed "
+              "by mistake." if held else ""))
     _write_records(sheet, 4, ACCEPT_COLUMNS, _order(accepted))
 
 
@@ -330,6 +445,60 @@ def _owner_sheet(workbook: Workbook, records: list[dict]) -> None:
     _widths(sheet, columns)
 
 
+def _lens(items: list[Assessment]) -> str:
+    return items[0].lens if items else "signal"
+
+
+def _sources(items: list[Assessment]) -> str:
+    lens = _lens(items)
+    used = "NIST NVD (CVE Program as fallback), FIRST EPSS, CISA KEV"
+    if lens in ("full", "forensic"):
+        used += ", OSV.dev and GitHub Security Advisories (fixed versions)"
+    if lens == "forensic":
+        used += ", GitHub repository search (exploit material)"
+    note = ("" if lens != "signal" else
+            " This run used the 'signal' lens, which does not look up fixed versions; where the scanner reports "
+            "fixability it is shown in 'Scanner fixability'.")
+    return used + "." + note
+
+
+def _exploit_evidence(items: list[Assessment]) -> str:
+    text = ("CISA KEV (observed exploitation), FIRST EPSS (probability of exploitation in the next 30 days), and "
+            "references that NVD labels as exploit code.")
+    if _lens(items) == "forensic":
+        text += (" A heuristic GitHub search adds public exploit repositories; a match means code claims to "
+                 "exploit the CVE, not that it works.")
+    return text
+
+
+def _call_path(items: list[Assessment]) -> str:
+    analysed = sum(1 for i in items if i.code_reachability)
+    if not analysed:
+        return ("No call-path analysis was supplied, so reachability is judged from the CVSS vector and the "
+                "inventory, not from your code.")
+    return (f"The scanner's call-path analysis was used for {analysed} of {len(items)} finding(s): 'no call path' "
+            "lowers Reachability (x0.4) unless the CVE is in CISA KEV; the rest are judged from the CVSS vector "
+            "and the inventory.")
+
+
+def _policy_text(summary: dict | None) -> str:
+    policy = TriagePolicy.from_dict((summary or {}).get("policy"))
+    parts = []
+    if policy.issue_types:
+        parts.append(f"Issue types in scope: {', '.join(policy.issue_types)}; rows of any other type (e.g. "
+                     "licence) are 'Out of scope' and are on no hand-off sheet.")
+    if policy.priority_severities:
+        parts.append(f"Priority severities: {', '.join(s.title() for s in policy.priority_severities)}. A row the "
+                     "scanner rates lower is still judged on exposure (Fix, Schedule, Accept or Not analysed) but "
+                     "is marked 'Not prioritised' and listed after the priority rows on 'Engineering - fix', "
+                     "unless the CVE is in CISA KEV (exploited in the wild).")
+    if policy.suppress_accepted == "all":
+        parts.append("Every accepted row is suppressed in the scanner until the next review, including rows the "
+                     "scanner flags (call path, mature exploit); the ignore reason records the flag.")
+    return " ".join(parts) or ("None set: every row is in scope and every severity is a priority. Set "
+                               "'policy.issue_types' and 'policy.priority_severities' in the inventory to apply one.")
+
+
 def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | None) -> None:
     sheet = workbook.create_sheet("Method")
     sheet.column_dimensions["A"].width = 24
@@ -350,7 +519,10 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
         ("Schedule", "Queue for the next planned maintenance window."),
         ("Accept", "No action warranted. Record the decision and move on."),
         ("Judgment", "Per scanner row: Fix (Contain or Remediate), Schedule, Accept, or Not analysed when there was "
-                     "not enough context to judge it (no inventory match, or no CVE)."),
+                     "not enough context to judge it (no inventory match, too little data to accept, or no CVE). "
+                     "Every in-scope row is judged on exposure, whatever its severity; 'Priority' then applies the "
+                     "policy below."),
+        ("Policy", _policy_text(summary)),
         ("", ""),
         ("Due dates", (f"From the verdict: {summary['sla_policy']} Set in the inventory's 'sla' block."
                        if summary and summary.get("sla_policy") else
@@ -359,11 +531,11 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
         ("Confidence", "high = CVE record, EPSS and asset context all present. low = at least two are missing; "
                        "treat the number as provisional."),
         ("", ""),
-        ("Data sources", "NIST NVD, CVE Program (fallback), FIRST EPSS, CISA KEV, OSV.dev, GitHub Security Advisories."),
-        ("Caveat", "Exploit-artifact discovery is a heuristic GitHub search. A match means public code claims to "
-                   "exploit the CVE, not that it works."),
-        ("Caveat", "Asset context comes from your inventory. Nothing here can verify that the vulnerable code path "
-                   "is actually reachable in your deployment."),
+        ("Data sources", _sources(items)),
+        ("Exploit evidence", _exploit_evidence(items)),
+        ("Call path", _call_path(items)),
+        ("Caveat", "Asset context (tier, internet exposure, data class, owner) comes from your inventory and is "
+                   "only as current as it is."),
     ]
     if items:
         rows += [
@@ -420,7 +592,9 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
                  f"{r['cve_asset_pairs']}  ({r['deduplication_pct']}% scanner duplication removed)"),
                 (f"  Urgent on CVSS alone (>= {r['severity_floor']:g})", r["urgent_on_severity_alone"]),
                 ("  Actionable after exposure analysis",
-                 f"{r['actionable_findings']}  ({r['analysis_reduction_pct']}% of the severity queue removed)"),
+                 f"{r['actionable_findings']}  Contain or Remediate ({r['analysis_reduction_pct']}% of the "
+                 "severity queue moved off the urgent path). Schedule findings are not counted here: they are "
+                 "still fixed, on the planned cycle."),
                 ("  Collapsed to nil by business context", r["collapsed_by_business_context"]),
                 ("  Upgrades to perform",
                  f"{r['actionable_work_items']} across {r['actionable_work_assets']} asset(s). "
@@ -444,11 +618,14 @@ def _method_sheet(workbook: Workbook, items: list[Assessment], summary: dict | N
 
 def build_workbook(items: list[Assessment], path: str | Path, summary: dict | None = None) -> Path:
     path = Path(path)
-    records = export_rows(items, ((summary or {}).get("not_scored") or {}).get("rows"))
+    records = export_rows(items, ((summary or {}).get("not_scored") or {}).get("rows"),
+                          TriagePolicy.from_dict((summary or {}).get("policy")))
     workbook = Workbook()
     _findings_sheet(workbook, records)
     _manual_review_sheet(workbook, records)
-    _to_fix_sheet(workbook, records)
+    _engineering_sheet(workbook, records)
+    _devsecops_sheet(workbook, records, (summary or {}).get("review_days", 90))
+    _no_fix_sheet(workbook, records, (summary or {}).get("review_days", 90))
     _action_sheet(workbook, records)
     _accepted_sheet(workbook, records)
     _owner_sheet(workbook, records)

@@ -12,7 +12,14 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .assessment import JUDGMENT_ORDER, assess_portfolio, export_rows, not_scored_summary, portfolio_summary
+from .assessment import (
+    JUDGMENT_ORDER,
+    NOT_PRIORITISED,
+    assess_portfolio,
+    export_rows,
+    not_scored_summary,
+    portfolio_summary,
+)
 from .config import settings
 from .inventory import TEMPLATE, AssetProfile, Inventory
 from .report import (
@@ -230,10 +237,15 @@ async def cmd_import(args) -> int:
 
     summary = portfolio_summary(results)
     summary["sla_policy"] = inventory.sla.describe()
+    summary["review_days"] = inventory.sla.review_days
     if unscored:
         summary["not_scored"] = not_scored_summary(unscored)
-    records = export_rows(results, (summary.get("not_scored") or {}).get("rows"))
+    summary["policy"] = inventory.policy.to_dict()
+    records = export_rows(results, (summary.get("not_scored") or {}).get("rows"), inventory.policy)
     summary["by_judgment"] = {j: sum(1 for r in records if r["judgment"] == j) for j in JUDGMENT_ORDER}
+    summary["by_judgment_priority"] = {
+        j: sum(1 for r in records if r["judgment"] == j and not r["priority"].startswith(NOT_PRIORITISED))
+        for j in JUDGMENT_ORDER}
     summary["intake"] = {
         "export_rows": rows_with_cve + len(unscored),
         "rows_without_cve": len(unscored),
@@ -440,7 +452,7 @@ async def _cmd_inventory_import(args) -> int:
         ERR.print(f"Merging into existing {target} ({len(existing.assets)} asset(s))")
 
     target.write_text(dump_inventory_yaml(inventory), encoding="utf-8")
-    OUT.print(f"[green]Wrote {target}[/] — {len(inventory.assets)} asset(s)")
+    OUT.print(f"[green]Wrote {target}[/]: {len(inventory.assets)} asset(s)")
 
     tiers: dict[str, int] = {}
     for asset in inventory.assets:

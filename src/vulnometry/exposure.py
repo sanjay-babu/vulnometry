@@ -11,7 +11,7 @@ from .schema import (
     Weakness,
 )
 
-MODEL_VERSION = "bei-1.1"
+MODEL_VERSION = "bei-1.3"
 
 THREAT_EXPONENT = 0.8
 REACH_EXPONENT = 0.7
@@ -36,6 +36,56 @@ MATURITY_THREAT = {"weaponised": 0.78, "proof-of-concept": 0.55, "referenced": 0
 # than zeroes. 0.4 is the same weight as "not internet-reachable", and after the
 # 0.7 exponent it roughly halves the index: about one verdict band.
 CODE_UNREACHABLE_REACH = 0.4
+
+# Controls that sit in the network path (a WAF, a firewall, a DDoS or rate-limiting service).
+# They filter traffic, so they do nothing against an attack that needs local or physical access.
+_NETWORK_CONTROL_WORDS = ("waf", "firewall", "ddos", "rate limit", "rate-limit", "rate limiting", "cdn",
+                          "web application firewall", "intrusion prevention")
+
+# Denial of service only (no confidentiality or integrity impact) against an internal asset: an
+# attacker must already be on the internal network, and the worst case is a recoverable outage of
+# one internal system, not a breach. Halves the consequence.
+INTERNAL_DOS_CONSEQUENCE = 0.5
+
+
+# What a WAF can actually stop: attacks carried in the content of a web request, which its rules
+# inspect, and request floods, which its rate limiting absorbs. It does nothing for weaknesses in
+# authentication, cryptography, authorisation logic or data handling, so they get no credit.
+_WAF_FILTERS = {
+    **dict.fromkeys(("CWE-74", "CWE-75", "CWE-77", "CWE-78", "CWE-88", "CWE-89", "CWE-90", "CWE-91", "CWE-94",
+                     "CWE-95", "CWE-96", "CWE-97", "CWE-564", "CWE-917", "CWE-943", "CWE-1336"), "injection"),
+    **dict.fromkeys(("CWE-79", "CWE-80", "CWE-83", "CWE-87"), "cross-site scripting"),
+    **dict.fromkeys(("CWE-22", "CWE-23", "CWE-24", "CWE-25", "CWE-35", "CWE-36", "CWE-73"), "path traversal"),
+    "CWE-918": "server-side request forgery",
+    **dict.fromkeys(("CWE-611", "CWE-827"), "XML external entities"),
+    "CWE-502": "deserialization payloads",
+    "CWE-444": "request smuggling",
+    **dict.fromkeys(("CWE-93", "CWE-113"), "header injection (CRLF)"),
+    **dict.fromkeys(("CWE-400", "CWE-405", "CWE-407", "CWE-409", "CWE-606", "CWE-674", "CWE-770", "CWE-776",
+                     "CWE-834", "CWE-835", "CWE-1050", "CWE-1333"), "denial of service"),
+}
+
+
+def waf_filters(severity, cwe_ids: list[str] | None) -> str:
+    """The attack class a WAF in front of the asset filters for this weakness, or "" when it does not."""
+    for cwe in cwe_ids or []:
+        if cwe in _WAF_FILTERS:
+            return _WAF_FILTERS[cwe]
+    return "denial of service" if availability_only(severity) else ""
+
+
+def _network_control(name: str) -> bool:
+    text = name.lower()
+    return any(word in text for word in _NETWORK_CONTROL_WORDS)
+
+
+def availability_only(severity) -> bool:
+    """CVSS impact is to availability alone: the flaw can take the service down but not read or change data."""
+    if severity is None:
+        return False
+    c, i, a = (_first_letter(severity.confidentiality), _first_letter(severity.integrity),
+               _first_letter(severity.availability))
+    return c == "N" and i == "N" and a in ("H", "L")
 
 
 def _first_letter(value: str) -> str:
@@ -99,6 +149,7 @@ def compute_reachability(
     asset: AssetProfile,
     code_reachability: str = "",
     exploited: bool = False,
+    cwe_ids: list[str] | None = None,
 ) -> tuple[float, list[str], str]:
     basis: list[str] = []
     severity = weakness.primary_severity()
@@ -143,8 +194,26 @@ def compute_reachability(
         basis.append("Deployment status unconfirmed")
 
     if asset.has_controls:
-        reach *= 0.45
-        basis.append(f"Compensating controls in place: {', '.join(asset.compensating_controls[:3])}")
+        local = severity is not None and _first_letter(severity.attack_vector) in ("L", "P")
+        network = [c for c in asset.compensating_controls if _network_control(c)]
+        applicable = [c for c in asset.compensating_controls if c not in network]
+        kind = waf_filters(severity, cwe_ids)
+        if network and local:
+            basis.append(f"{', '.join(network[:3])} not counted: a network control is not in the path of a "
+                         "local attack")
+        elif network and not kind:
+            weakness_name = ", ".join((cwe_ids or [])[:2]) or "an unclassified weakness"
+            basis.append(f"{', '.join(network[:3])} not counted: a WAF does not filter this kind of weakness "
+                         f"({weakness_name})")
+        else:
+            applicable += network
+        if applicable:
+            reach *= 0.45
+            line = f"Compensating controls in place: {', '.join(applicable[:3])}"
+            if network and network[0] in applicable:
+                line += (" (rate limiting and request filtering in front of the app blunt denial-of-service traffic)"
+                         if kind == "denial of service" else f" (its rules inspect requests for {kind})")
+            basis.append(line)
 
     if code_reachability == "reachable":
         basis.append("Scanner's reachability analysis found a call path to the vulnerable function")
@@ -182,6 +251,10 @@ def compute_consequence(weakness: Weakness, asset: AssetProfile) -> tuple[float,
         basis.append("No CVSS published, impact assumed moderate pending analysis")
 
     consequence = impact * asset.tier_weight
+    if availability_only(severity) and asset.internet_exposed is False:
+        consequence *= INTERNAL_DOS_CONSEQUENCE
+        basis.append("Denial of service only, no data read or changed, on an internal app: an attacker must "
+                     "already be inside the network, and the worst case is a recoverable outage")
     basis.append(f"{asset.name} is {asset.tier_label} (tier weight {asset.tier_weight:g})")
 
     consequence *= asset.data_weight
@@ -227,13 +300,14 @@ def measure_exposure(
     artifacts: list[ExploitArtifact] | None = None,
     asset: AssetProfile | None = None,
     code_reachability: str = "",
+    cwe_ids: list[str] | None = None,
 ) -> ExposureMeasure:
     artifacts = artifacts or []
     asset = asset or UNKNOWN_ASSET
 
     threat, threat_basis = compute_threat(probability, exploitation, artifacts)
     reach, reach_basis, collapsed = compute_reachability(
-        weakness, asset, code_reachability, exploited=exploitation.confirmed
+        weakness, asset, code_reachability, exploited=exploitation.confirmed, cwe_ids=cwe_ids
     )
     consequence, consequence_basis = compute_consequence(weakness, asset)
 
@@ -259,14 +333,56 @@ def measure_exposure(
     )
 
 
+# Guardrails: threat evidence that rules out accepting a risk, whatever the index says. They raise the
+# verdict to a floor and say why; the index is left as computed, so the arithmetic stays auditable.
+# Deliberately only two, both about exploitation: everything else (call path, exposure, controls,
+# impact) is weighed together in the index, and no single factor overrides it.
+EPSS_FLOOR = 0.10            # the same level at which an accepted risk is reopened
+_RANK = {"Accept": 0, "Schedule": 1, "Remediate": 2, "Contain": 3}
+
+
+def apply_floors(
+    measure: ExposureMeasure,
+    exploitation: ConfirmedExploitation,
+    probability: ExploitProbability,
+    asset: AssetProfile,
+) -> ExposureMeasure:
+    if measure.collapsed_by == "not-deployed":
+        return measure
+    floors: list[tuple[str, str]] = []
+    if exploitation.confirmed:
+        floors.append(("Remediate", "it is exploited in the wild (CISA KEV), which rules out accepting or "
+                                    "deferring it"))
+    if probability.probability is not None and probability.probability >= EPSS_FLOOR:
+        floors.append(("Schedule", f"EPSS puts exploitation within 30 days at {probability.probability * 100:.2f}%, "
+                                   f"at or above the {EPSS_FLOOR * 100:.0f}% level at which an accepted risk is "
+                                   "reopened"))
+    raising = [(v, why) for v, why in floors if _RANK[v] > _RANK.get(measure.verdict, 0)]
+    if not raising:
+        return measure
+    top = max(_RANK[v] for v, _ in raising)
+    verdict = next(v for v, r in _RANK.items() if r == top)
+    measure.scored_verdict = measure.verdict
+    measure.verdict = verdict
+    measure.floor_reason = "; and ".join(why for _, why in raising)
+    return measure
+
+
 def directive_for(
     measure: ExposureMeasure,
     exploitation: ConfirmedExploitation,
     fixes: list[str],
     asset: AssetProfile,
     due_by: str = "",
+    fixes_checked: bool = True,
+    scanner_fixability: str = "",
 ) -> str:
-    """The action sentence that goes in the ticket."""
+    """The action sentence that goes in the ticket.
+
+    Only says no fix exists when fix versions were actually looked up (the full and forensic
+    lenses query OSV and GitHub advisories; signal does not). The scanner's own fixability is
+    reported when that is all there is.
+    """
     parts = [VERDICT_MEANING.get(measure.verdict, "Review.")]
 
     if measure.collapsed_by == "not-deployed":
@@ -279,9 +395,18 @@ def directive_for(
         parts.append(f"Target date {due_by}.")
     if exploitation.confirmed and exploitation.federal_deadline:
         parts.append(f"CISA deadline for federal agencies was {exploitation.federal_deadline}.")
+    scanner_has_fix = scanner_fixability.strip().lower() in ("fixable", "partially fixable")
     if fixes:
-        parts.append(f"Upgrade to {', '.join(fixes[:3])}.")
-    elif measure.verdict in ("Contain", "Remediate"):
+        parts.append(f"A fix exists ({', '.join(fixes[:3])}); take it with routine dependency upgrades."
+                     if measure.verdict == "Accept" else f"Upgrade to {', '.join(fixes[:3])}.")
+        if "no fix" in scanner_fixability.lower():
+            parts.append("The scanner offers no automatic fix path, which usually means the package arrives "
+                         "through another dependency: upgrade the parent that pulls it in, or pin the fixed version.")
+    elif scanner_has_fix and measure.verdict == "Accept":
+        parts.append(f"The scanner reports a fix ({scanner_fixability}); take it with routine dependency upgrades.")
+    elif scanner_fixability and measure.verdict in ("Contain", "Remediate", "Schedule"):
+        parts.append(f"Scanner fixability: {scanner_fixability}; see the scanner issue for the fixed version.")
+    elif fixes_checked and measure.verdict in ("Contain", "Remediate"):
         parts.append("No fixed version published. Apply the vendor mitigation or isolate the service.")
     if measure.confidence == "low":
         parts.append("Confidence is low; the inventory entry or the CVE record is incomplete.")

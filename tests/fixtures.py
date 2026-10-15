@@ -62,8 +62,11 @@ GHSA_LOG4SHELL = [{
 
 GITHUB_REPOS = {"items": [
     {"full_name": "redteam/log4shell-rce", "html_url": "https://github.com/redteam/log4shell-rce",
-     "description": "Weaponised metasploit module", "stargazers_count": 2100,
+     "description": "Weaponised metasploit module for CVE-2021-44228", "stargazers_count": 2100,
      "created_at": "2021-12-11T00:00:00Z"},
+    {"full_name": "acme/payments-sdk", "html_url": "https://github.com/acme/payments-sdk",
+     "description": "Payments SDK. Upgraded log4j for CVE-2021-44228", "stargazers_count": 5000,
+     "created_at": "2019-01-01T00:00:00Z"},
     {"full_name": "nomi-sec/PoC-in-GitHub", "html_url": "https://github.com/nomi-sec/PoC-in-GitHub",
      "description": "index of everything", "stargazers_count": 9000,
      "created_at": "2020-01-01T00:00:00Z"},

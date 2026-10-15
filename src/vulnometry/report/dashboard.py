@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import html
-from datetime import date
 from pathlib import Path
 
+from ..evidence import run_date
 from ..schema import Assessment
 
 VERDICT_COLOUR = {
@@ -333,7 +333,7 @@ def build_dashboard(
     unattributed = summary.get("unattributed", 0)
     reduction = summary.get("reduction") or {}
 
-    overdue = sum(1 for i in items if i.due_by and i.due_by < date.today().isoformat())
+    overdue = sum(1 for i in items if i.due_by and i.due_by < run_date().isoformat())
     heat, heat_dimension = _heatmap(items)
     cross = summary.get("severity_crosstab") or {}
     by_scanner = cross.get("by_scanner_severity") or {}
@@ -361,7 +361,7 @@ def build_dashboard(
 <body>
 <header>
   <h1>{_e(title)}</h1>
-  <p>{len(items)} findings measured · generated {date.today().isoformat()} · Business Exposure Index, 0 to 1000</p>
+  <p>{len(items)} findings measured · generated {run_date().isoformat()} · Business Exposure Index, 0 to 1000</p>
 </header>
 <main>
 

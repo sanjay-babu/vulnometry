@@ -59,6 +59,8 @@ def _default_buckets() -> dict[str, TokenBucket]:
         "services.nvd.nist.gov": TokenBucket(nvd_rate, burst=2 if not cfg.nvd_api_key else 8),
         "api.first.org": TokenBucket(5, burst=10),
         "api.github.com": TokenBucket(1.0 if cfg.github_token else 0.2, burst=5),
+        # GitHub's search API has its own, much lower limit: 30 a minute with a token, 10 without.
+        "api.github.com/search": TokenBucket(0.45 if cfg.github_token else 0.15, burst=2),
         "api.osv.dev": TokenBucket(10, burst=20),
         "cveawg.mitre.org": TokenBucket(5, burst=10),
         "www.cisa.gov": TokenBucket(2, burst=4),
@@ -227,7 +229,7 @@ class Client:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def request_json(
+    async def _request_live(
         self,
         method: str,
         url: str,
@@ -251,8 +253,10 @@ class Client:
         if cfg.offline:
             raise FeedError(source, "offline mode is on and this request was not cached")
 
-        host = urlparse(url).netloc
-        bucket = await _bucket_for(host)
+        parsed = urlparse(url)
+        host = parsed.netloc
+        bucket = await _bucket_for(f"{host}/search" if host == "api.github.com" and
+                                   parsed.path.startswith("/search/") else host)
         client = await self._ensure()
 
         last_error = "unknown error"
@@ -286,6 +290,14 @@ class Client:
                     await cache().set(cache_key, payload, ttl)
                 return payload
 
+            if resp.status_code == 403 and _rate_limited(resp):
+                # GitHub answers 403, not 429, when a rate limit is hit. Wait it out rather than
+                # report "nothing found": a missed exploit search is a false negative.
+                delay = _rate_limit_delay(resp)
+                last_error = f"rate limited, retrying in {delay:.0f}s"
+                await asyncio.sleep(delay)
+                continue
+
             if resp.status_code in (429, 500, 502, 503, 504):
                 retry_after = resp.headers.get("Retry-After")
                 delay = float(retry_after) if (retry_after or "").isdigit() else min(2**attempt, 10)
@@ -297,11 +309,46 @@ class Client:
 
         raise FeedError(source, f"gave up after {cfg.max_retries + 1} attempts ({last_error})")
 
+    async def request_json(self, method: str, url: str, *, source: str, params=None, json_body=None,
+                           **kw) -> Any:
+        """A feed request, answered from the run's evidence file when one is being replayed and
+        written to it when one is being recorded. A request that failed is not recorded, so a
+        replay reports the same gap."""
+        from .evidence import evidence
+
+        store = evidence()
+        key = _cache_key(method, url, params, json_body)
+        if store is not None and store.replaying:
+            found, payload = await store.get(key)
+            if not found:
+                raise FeedError(source, "not in the evidence file being replayed")
+            return payload
+        payload = await self._request_live(method, url, source=source, params=params, json_body=json_body, **kw)
+        if store is not None:
+            await store.put(key, source, payload)
+        return payload
+
     async def get_json(self, url: str, **kw) -> Any:
         return await self.request_json("GET", url, **kw)
 
     async def post_json(self, url: str, **kw) -> Any:
         return await self.request_json("POST", url, **kw)
+
+
+def _rate_limited(resp) -> bool:
+    if resp.headers.get("x-ratelimit-remaining") == "0" or resp.headers.get("Retry-After"):
+        return True
+    return "rate limit" in resp.text[:500].lower()
+
+
+def _rate_limit_delay(resp) -> float:
+    retry_after = resp.headers.get("Retry-After")
+    if (retry_after or "").isdigit():
+        return min(float(retry_after), 120.0)
+    reset = resp.headers.get("x-ratelimit-reset")
+    if (reset or "").isdigit():
+        return max(1.0, min(float(reset) - time.time() + 1, 120.0))
+    return 60.0
 
 
 def _cache_key(method: str, url: str, params, body) -> str:

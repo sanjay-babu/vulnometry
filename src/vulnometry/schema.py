@@ -190,7 +190,7 @@ class ExposureMeasure(Serialisable):
 
     index: float = 0.0
     verdict: str = "Accept"
-    model_version: str = "bei-1.1"
+    model_version: str = "bei-1.3"
     threat: float = 0.0
     reachability: float = 0.0
     consequence: float = 0.0
@@ -199,6 +199,10 @@ class ExposureMeasure(Serialisable):
     consequence_basis: list[str] = field(default_factory=list)
     collapsed_by: str = ""
     confidence: str = "medium"
+    # When a guardrail raised the verdict above what the index alone gives: the verdict the index
+    # gave, and why it was not allowed to stand. The index itself is never changed.
+    scored_verdict: str = ""
+    floor_reason: str = ""
 
 
 @dataclass
@@ -249,6 +253,10 @@ class Assessment(Serialisable):
     issue_url: str = ""  # the scanner's link to this issue
     issue_id: str = ""  # the scanner's identifier for this issue
     source_title: str = ""  # the scanner's title for this issue
+    scanner_fixability: str = ""  # the scanner's own view of whether a fix exists
+    issue_type: str = ""  # the scanner's classification: Vulnerability, License, ...
+    scanner_exploit_maturity: str = ""  # the scanner's view: Mature, Proof of Concept, No Known Exploit
+    fixes_checked: bool = True  # False when fixed versions were not looked up (signal lens)
 
     directive: str = ""
     gaps: list[str] = field(default_factory=list)
@@ -300,19 +308,38 @@ class Assessment(Serialisable):
             ("reachability", e.reachability, e.reachability_basis),
             ("consequence", e.consequence, e.consequence_basis),
         ]
+        if e.floor_reason:
+            return self._floored_rationale()
         urgent = e.verdict in ("Contain", "Remediate")
         name, _, basis = (max if urgent else min)(factors, key=lambda f: f[1])
         lead = {
             ("threat", True): "exploitation is likely or under way",
-            ("threat", False): "little sign anyone will try",
+            ("threat", False): "exploitation unlikely in the next 30 days",
             ("reachability", True): "readily reachable in this environment",
             ("reachability", False): "hard to reach in this environment",
             ("consequence", True): "high impact if exploited",
             ("consequence", False): "limited impact if exploited",
         }[(name, urgent)]
 
-        parts = [f"{e.verdict}: {lead} — {(basis or ['no detail recorded'])[0]}."]
+        if urgent:
+            parts = [f"{e.verdict}: {lead}, because {_sentence((basis or ['no detail recorded'])[0])}."]
+        else:
+            # Cite what actually lowered the score, not whatever was recorded first: 'Attack vector
+            # is network' is a reason something is reachable, so it can't explain 'hard to reach'.
+            if name == "threat" and basis and basis[0].startswith("No EPSS"):
+                lead = "no exploitation data yet"
+            reasons = _reducing(name, basis) or (basis or ["no detail recorded"])[:1]
+            parts = [f"{e.verdict}: {lead}, because {'; '.join(_sentence(r) for r in reasons)}."]
+            also = [r for other, _, b in factors if other != name for r in _reducing(other, b)[:1]]
+            if also:
+                parts.append("Also: " + "; ".join(_sentence(r) for r in also) + ".")
 
+        parts.append(self._context())
+        return " ".join(parts)
+
+    def _context(self) -> str:
+        """The facts a reader checks a verdict against, the fix situation, and the confidence."""
+        e = self.exposure
         ctx = [self.exposure_facing()]
         if self.tier:
             ctx.append(f"tier {self.tier}")
@@ -326,23 +353,93 @@ class Assessment(Serialisable):
         else:
             ctx.append("no EPSS score")
         ctx.append("in CISA KEV" if self.exploitation.confirmed else "not in CISA KEV")
+        if self.scanner_exploit_maturity:
+            ctx.append(f"scanner exploit maturity: {self.scanner_exploit_maturity}")
+        elif self.artifacts:
+            ctx.append("public exploit material referenced")
         if self.code_reachability:
             ctx.append(
                 "call path to the vulnerable function"
                 if self.code_reachability == "reachable"
                 else "no call path to the vulnerable function"
             )
-        parts.append("Context: " + ", ".join(ctx) + ".")
+        parts = ["Context: " + ", ".join(ctx) + "."]
+        parts += [line[0].upper() + line[1:] + "." for line in e.reachability_basis if " not counted: " in line]
 
         if not self.fixes and e.verdict in ("Accept", "Schedule"):
-            parts.append("No fixed version published.")
+            if self.scanner_fixability:
+                parts.append(f"Scanner fixability: {self.scanner_fixability}.")
+            elif self.fixes_checked:
+                parts.append("No fixed version published.")
         parts.append(f"Confidence: {e.confidence}.")
         return " ".join(parts)
 
+    def _floored_rationale(self) -> str:
+        """A verdict a guardrail raised: why it could not be accepted, then what the score said."""
+        e = self.exposure
+        index_said = (f"the exposure index alone ({e.index:.1f}) gives {e.scored_verdict}"
+                      + (f", on {'; '.join(_sentence(r) for r in self._lowest_reasons())}" if self._lowest_reasons()
+                         else ""))
+        return (f"{e.verdict}: {e.floor_reason}, so it is not left at {e.scored_verdict}. "
+                f"For the record, {index_said}. {self._context()}")
+
+    def _lowest_reasons(self) -> list[str]:
+        e = self.exposure
+        factors = [("threat", e.threat, e.threat_basis), ("reachability", e.reachability, e.reachability_basis),
+                   ("consequence", e.consequence, e.consequence_basis)]
+        name, _, basis = min(factors, key=lambda f: f[1])
+        return _reducing(name, basis)
+
     def one_line(self) -> str:
-        bits = [self.cve_id, f"BEI {self.exposure.index:.0f}", self.exposure.verdict]
+        bits = [self.cve_id, f"BEI {self.exposure.index:.1f}", self.exposure.verdict]
         if self.where():
             bits.append(f"on {self.where()}")
         if self.exploitation.confirmed:
             bits.append("KEV")
         return " · ".join(bits)
+
+
+# Evidence lines that lower a factor, strongest first. Lines that raise it (a network attack
+# vector, internet exposure, a call path) are never offered as the reason something scored low.
+_REDUCING = {
+    "reachability": (
+        "found no call path", "does not run the affected component", "is not internet-reachable",
+        "Compensating controls in place", "Attack vector is local", "Attack vector is adjacent",
+        "Attack vector is physical", "Requires privileged access", "High attack complexity",
+        "Requires some level", "Needs a user", "Internet exposure unknown",
+    ),
+    "threat": ("EPSS puts exploitation",),
+    "consequence": ("Denial of service only", "CVSS impact", "base score", "supporting", "Holds internal data",
+                    "Holds public data"),
+}
+
+
+_EPSS_PCT = re.compile(r"at (\d+(?:\.\d+)?)%")
+
+
+def _low_epss(line: str) -> bool:
+    """Below the EPSS level at which an accepted risk is reopened (10%), so it can explain a low score."""
+    match = _EPSS_PCT.search(line)
+    return not match or float(match.group(1)) < 10.0
+
+
+def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
+    markers = _REDUCING.get(factor, ())
+    found = []
+    for marker in markers:
+        for line in basis:
+            if marker in line and line not in found:
+                found.append(line)
+    if factor == "threat":
+        # An EPSS line is a reason for low threat only when it is low; public exploit material never is.
+        found = [line for line in found if not any(w in line for w in ("Public exploit",)) and _low_epss(line)]
+    return found[:limit]
+
+
+_LOWER_FIRST = ("Scanner's", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ", "Denial",
+                "Public", "Holds", "In scope", "Production", "Development")
+
+
+def _sentence(line: str) -> str:
+    """Lower-case the first letter of evidence phrases ('Scanner's ...'), never of a name that starts a line."""
+    return line[0].lower() + line[1:] if line.startswith(_LOWER_FIRST) else line
