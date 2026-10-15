@@ -331,7 +331,7 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
     assert workbook.sheetnames == ["Findings", "Manual review", "Engineering - fix", "DevSecOps - suppress",
-                                   "DevSecOps - until fixable", "Action Plan", "Accepted", "By Owner", "Method"]
+                                   "DevSecOps - no fix yet", "Action Plan", "Accepted", "By Owner", "Method"]
     rows = _table(workbook["Findings"], ["CVE", "Verdict", "Judgment"])
     assert rows[0] == {"CVE": "CVE-2021-44228", "Verdict": "Contain", "Judgment": "Fix"}
     assert workbook["Findings"].auto_filter.ref
@@ -716,10 +716,11 @@ def test_a_schedule_row_with_no_fix_anywhere_waits_in_the_scanner_instead_of_the
                    exposure=ExposureMeasure(index=200, verdict="Schedule", confidence="high")),
     ]
     workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
-    parked = {r["Export row"]: r for r in _table(workbook["DevSecOps - until fixable"],
+    parked = {r["Export row"]: r for r in _table(workbook["DevSecOps - no fix yet"],
                                                  ["Export row", "Ignore type", "Ignore reason"])}
     assert set(parked) == {8}, "KEV is never parked, and a published fixed version means upgrade"
-    assert parked[8]["Ignore type"] == "temporary-ignore, until fixable"
+    assert parked[8]["Ignore type"] == "temporary-ignore"
+    assert "reopens" not in parked[8]["Ignore reason"], "no promise the scanner cannot keep"
     assert parked[8]["Ignore reason"].startswith("No fix available on")
     engineering = {r["Export row"] for r in _table(workbook["Engineering - fix"], ["Export row"])}
     assert 8 not in engineering and {9, 10, 4} <= engineering, "missing fix data alone never parks a row"

@@ -588,7 +588,7 @@ def _apply_policy(rec: dict, policy) -> None:
 def awaiting_fix(rec: dict) -> bool:
     """A Schedule row with nothing to upgrade to: no fixed version in the advisories, and the scanner
     (when it says) offers no fix either. Its risk stands, but there is no change to make yet, so it is
-    suppressed in the scanner until a fix is published rather than queued for engineering. Rows judged
+    suppressed in the scanner until the next review rather than queued for engineering. Rows judged
     Fix, and anything exploited in the wild, are never parked this way."""
     item = rec.get("item")
     if rec.get("judgment") != "Schedule" or item is None or not rec.get("analysed"):

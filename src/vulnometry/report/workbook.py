@@ -314,7 +314,7 @@ def _engineering_sheet(workbook: Workbook, records: list[dict]) -> None:
            f"{len(fix)} row(s) to fix, by due date: Fix = Contain or Remediate (ahead of the routine cycle), "
            "Schedule = the next planned maintenance window."
            + (f" {parked} Schedule row(s) with no fix published anywhere are not here: they are on "
-              "'DevSecOps - until fixable' and reopen in the scanner when a fix appears." if parked else "")
+              "'DevSecOps - no fix yet', suppressed until the next review, which checks again for a fix." if parked else "")
            + " Then "
            f"{len(unjudged)} row(s) vulnometry could not judge (no inventory match, too little data, a licence "
            "issue, or no CVE): treat these on the scanner's severity until they are analysed. 'Fixed in' is the "
@@ -361,27 +361,26 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
     _write_records(sheet, 4, SUPPRESS_COLUMNS, _order(rows))
 
 
-def _until_fixable_sheet(workbook: Workbook, records: list[dict], review_days: int) -> None:
-    """For DevSecOps: Schedule rows with no fix anywhere, to suppress until a fix is published."""
+def _no_fix_sheet(workbook: Workbook, records: list[dict], review_days: int) -> None:
+    """For DevSecOps: Schedule rows with no fix anywhere, to suppress until the next review."""
     rows = [r for r in records if awaiting_fix(r)]
     for rec in rows:
         item = rec["item"]
         assessed = (item.measured_at or run_date().isoformat())[:10]
         until = (date.fromisoformat(assessed) + timedelta(days=review_days)).isoformat()
         rec["suppress_until"] = until
-        rec["ignore_type"] = "temporary-ignore, until fixable"
         why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
         rec["ignore_reason"] = (f"No fix available on {assessed} (no fixed version published; scanner: "
                                 f"{item.scanner_fixability or 'none'}). Risk stands: vulnometry "
                                 f"{item.exposure.model_version} Schedule (BEI {item.exposure.index:.1f}): {why}. "
-                                f"Ignored until a fix is published, then it reopens; re-review by {until} at the "
-                                "latest. Mitigate meanwhile where possible.")[:500]
-    sheet = workbook.create_sheet("DevSecOps - until fixable", 4)
-    _title(sheet, "DevSecOps: rows to suppress until a fix is available",
+                                f"Ignored until {until}, the next review, which checks again for a fix. Mitigate "
+                                "meanwhile where possible.")[:500]
+    sheet = workbook.create_sheet("DevSecOps - no fix yet", 4)
+    _title(sheet, "DevSecOps: rows with no fix yet, to suppress until the next review",
            f"{len(rows)} row(s) judged Schedule for which no fixed version exists anywhere (the advisories list "
            "none and the scanner offers no fix). The risk is not accepted: there is simply nothing to upgrade to "
-           "yet. Suppress each with 'until fixable' (Snyk: disregardIfFixable), so it reopens on its own the day a "
-           f"fix is published, and with 'Suppress until' ({review_days} days) as a backstop. Rows judged Fix, and "
+           f"yet. Suppress each as a temporary ignore until the date shown ({review_days} days, the next review); "
+           "the next run checks again and sends any that now have a fix to engineering. Rows judged Fix, and "
            "anything in CISA KEV, are never parked here. Fill 'Decided by' and 'Decision date' when signed off.")
     _write_records(sheet, 4, [*SUPPRESS_COLUMNS[:15], ("Directive", 60), *SUPPRESS_COLUMNS[15:]], _order(rows))
 
@@ -626,7 +625,7 @@ def build_workbook(items: list[Assessment], path: str | Path, summary: dict | No
     _manual_review_sheet(workbook, records)
     _engineering_sheet(workbook, records)
     _devsecops_sheet(workbook, records, (summary or {}).get("review_days", 90))
-    _until_fixable_sheet(workbook, records, (summary or {}).get("review_days", 90))
+    _no_fix_sheet(workbook, records, (summary or {}).get("review_days", 90))
     _action_sheet(workbook, records)
     _accepted_sheet(workbook, records)
     _owner_sheet(workbook, records)
