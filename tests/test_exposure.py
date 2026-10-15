@@ -281,33 +281,16 @@ def test_guardrails_raise_an_accept_but_never_change_the_index():
     kev = apply_floors(measure, ConfirmedExploitation(confirmed=True), probability, exposed)
     assert kev.verdict == "Remediate" and "CISA KEV" in kev.floor_reason
 
-    measure, probability, _ = _accepted(exposed)
-    assert apply_floors(measure, ConfirmedExploitation(), probability, exposed, "reachable").verdict == "Schedule"
-    measure, probability, _ = _accepted(exposed)
-    assert apply_floors(measure, ConfirmedExploitation(), probability, exposed, "", "Mature").verdict == "Schedule"
 
 
 def test_guardrails_leave_a_well_founded_accept_alone():
-    internal = AssetProfile(name="batch", tier=3, internet_exposed=False, deployed=True)
-    measure, probability, apply_floors = _accepted(internal)
-    kept = apply_floors(measure, ConfirmedExploitation(), probability, internal, "reachable", "Mature")
+    exposed = AssetProfile(name="portal", tier=3, internet_exposed=True, deployed=True)
+    measure, probability, apply_floors = _accepted(exposed)
+    kept = apply_floors(measure, ConfirmedExploitation(), probability, exposed)
     assert kept.verdict == "Accept" and not kept.floor_reason, \
-        "a call path or mature exploit on an internal asset is kept open, not forced to a fix"
+        "no single scanner flag overrides the index; only exploitation evidence does"
     gone = AssetProfile(name="old", tier=1, internet_exposed=True, deployed=False)
     measure = measure_exposure(wormable(), ExploitProbability(probability=0.9, resolved=True),
                                ConfirmedExploitation(confirmed=True), [], gone)
     assert apply_floors(measure, ConfirmedExploitation(confirmed=True), ExploitProbability(probability=0.9),
                         gone).verdict == "Accept", "nothing to fix where the component is not deployed"
-
-
-def test_a_critical_on_an_internet_facing_asset_needs_call_path_evidence_to_be_accepted():
-    exposed = AssetProfile(name="portal", tier=3, internet_exposed=True, deployed=True)
-    measure, probability, apply_floors = _accepted(exposed)
-    raised = apply_floors(measure, ConfirmedExploitation(), probability, exposed, "", "", critical=True)
-    assert raised.verdict == "Schedule" and "not called" in raised.floor_reason
-    measure, probability, _ = _accepted(exposed)
-    kept = apply_floors(measure, ConfirmedExploitation(), probability, exposed, "unreachable", "", critical=True)
-    assert kept.verdict == "Accept", "no call path is the evidence that allows it"
-    internal = AssetProfile(name="batch", tier=3, internet_exposed=False, deployed=True)
-    measure, probability, _ = _accepted(internal)
-    assert apply_floors(measure, ConfirmedExploitation(), probability, internal, "", "", critical=True).verdict == "Accept"

@@ -102,7 +102,6 @@ async def assess_finding(
     code_reachability: str = "",
     scanner_fixability: str = "",
     issue_id: str = "",
-    scanner_exploit_maturity: str = "",
 ) -> Assessment:
     """Assess one CVE against one place you run it."""
     cve_id = canonical_cve(cve_id)
@@ -145,11 +144,7 @@ async def assess_finding(
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
-    severity = weakness.primary_severity()
-    critical = (scanner_band(scanner_severity) == "Critical" if scanner_band(scanner_severity) else
-                bool(severity and severity.base_score is not None and severity.base_score >= 9.0))
-    measure = apply_floors(measure, exploitation, probability, asset, code_reachability, scanner_exploit_maturity,
-                           critical)
+    measure = apply_floors(measure, exploitation, probability, asset)
     fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
     due_by = asset.due_date(measure.verdict, from_date=run_date(), policy=policy)
@@ -250,7 +245,6 @@ async def assess_portfolio(
                 code_reachability=row["code_reachability"],
                 scanner_fixability=str(row.get("fixability") or "").strip(),
                 issue_id=row.get("issue_id", "") or issue_id_from(row.get("issue_url", "")),
-                scanner_exploit_maturity=str(row.get("exploit_maturity") or "").strip(),
             )
 
     results = await asyncio.gather(*(one(row) for row in normalised))

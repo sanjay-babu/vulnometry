@@ -296,8 +296,10 @@ def measure_exposure(
     )
 
 
-# Guardrails: evidence that rules out accepting a risk, whatever the index says. They raise the
+# Guardrails: threat evidence that rules out accepting a risk, whatever the index says. They raise the
 # verdict to a floor and say why; the index is left as computed, so the arithmetic stays auditable.
+# Deliberately only two, both about exploitation: everything else (call path, exposure, controls,
+# impact) is weighed together in the index, and no single factor overrides it.
 EPSS_FLOOR = 0.10            # the same level at which an accepted risk is reopened
 _RANK = {"Accept": 0, "Schedule": 1, "Remediate": 2, "Contain": 3}
 
@@ -307,11 +309,7 @@ def apply_floors(
     exploitation: ConfirmedExploitation,
     probability: ExploitProbability,
     asset: AssetProfile,
-    code_reachability: str = "",
-    scanner_exploit_maturity: str = "",
-    critical: bool = False,
 ) -> ExposureMeasure:
-    """``critical``: the finding is rated critical (by the scanner, or CVSS 9.0+ without one)."""
     if measure.collapsed_by == "not-deployed":
         return measure
     floors: list[tuple[str, str]] = []
@@ -322,17 +320,6 @@ def apply_floors(
         floors.append(("Schedule", f"EPSS puts exploitation within 30 days at {probability.probability * 100:.2f}%, "
                                    f"at or above the {EPSS_FLOOR * 100:.0f}% level at which an accepted risk is "
                                    "reopened"))
-    facing = asset.internet_exposed is True
-    if facing and code_reachability == "reachable":
-        floors.append(("Schedule", "the scanner found a call path to the vulnerable function on an "
-                                   "internet-facing asset"))
-    if facing and (scanner_exploit_maturity or "").strip().lower() == "mature":
-        floors.append(("Schedule", "the scanner reports a mature exploit and the asset is internet-facing"))
-    if facing and critical and code_reachability != "unreachable":
-        # A low EPSS is a forecast and a WAF is not a fix; accepting a critical flaw on an internet-facing
-        # asset needs evidence that the vulnerable code is not reached.
-        floors.append(("Schedule", "a critical finding on an internet-facing asset is accepted only with the "
-                                   "scanner's evidence that the vulnerable code is not called, and there is none"))
     raising = [(v, why) for v, why in floors if _RANK[v] > _RANK.get(measure.verdict, 0)]
     if not raising:
         return measure
