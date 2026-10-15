@@ -186,7 +186,7 @@ def test_no_call_path_discounts_reachability_by_about_one_band():
     assert no_path.reachability < base.reachability
     assert no_path.threat == base.threat and no_path.consequence == base.consequence
     assert abs(no_path.index / base.index - 0.4 ** 0.7) < 0.01
-    assert any("no call path" in b for b in no_path.reachability_basis)
+    assert any("no application execution path" in b for b in no_path.reachability_basis)
 
 
 def test_confirmed_call_path_is_recorded_not_scored():

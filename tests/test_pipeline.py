@@ -427,7 +427,7 @@ def test_scanner_call_graph_feeds_the_score():
     plain, no_path = by[("CVE-2023-40000", "a")], by[("CVE-2023-40000", "b")]
     assert no_path.code_reachability == "unreachable"
     assert no_path.exposure.index < plain.exposure.index
-    assert "no call path to the vulnerable function" in no_path.rationale()
+    assert "no application execution path to the vulnerable function" in no_path.rationale()
 
     kev_plain, kev_no_path = by[("CVE-2021-44228", "a")], by[("CVE-2021-44228", "b")]
     assert kev_no_path.exposure.index == kev_plain.exposure.index

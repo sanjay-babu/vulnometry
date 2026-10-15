@@ -481,11 +481,11 @@ def test_accept_rationale_cites_what_lowered_the_score():
             index=60, verdict="Accept", threat=0.3, reachability=0.1, consequence=0.8, confidence="high",
             threat_basis=["EPSS puts exploitation within 30 days at 0.40%, ahead of 30% of all CVEs"],
             reachability_basis=["Attack vector is network", "billing is not internet-reachable",
-                                "Scanner's reachability analysis found no call path to the vulnerable function"],
+                                "Scanner's reachability analysis identified no application execution path to the vulnerable function"],
             consequence_basis=["CVSS impact C:HIGH I:HIGH A:HIGH"]))
     text = item.rationale()
-    assert text.startswith("Accept: hard to reach in this environment, because scanner's reachability analysis found no "
-                           "call path to the vulnerable function; billing is not internet-reachable.")
+    assert text.startswith("Accept: hard to reach in this environment, because scanner's reachability analysis identified "
+                           "no application execution path to the vulnerable function; billing is not internet-reachable.")
     assert "Attack vector is network" not in text.split("Context:")[0], "a reason to reach is not a reason not to"
     assert "Also: EPSS puts exploitation within 30 days at 0.40%" in text
 
@@ -642,14 +642,14 @@ def test_a_raised_verdict_says_why_and_a_high_epss_is_never_a_reason_for_low_ris
 
     measure = ExposureMeasure(index=147, verdict="Schedule", scored_verdict="Accept", threat=0.8, reachability=0.1,
                               consequence=0.9, floor_reason="EPSS puts exploitation within 30 days at 64.41%",
-                              reachability_basis=["Scanner's reachability analysis found no call path to the "
+                              reachability_basis=["Scanner's reachability analysis identified no application execution path to the "
                                                   "vulnerable function"],
                               threat_basis=["EPSS puts exploitation within 30 days at 64.41%"], confidence="high")
     item = Assessment(cve_id="CVE-2026-1", asset="portal", exposure=measure,
                       probability=ExploitProbability(probability=0.6441, resolved=True))
     text = item.rationale()
     assert text.startswith("Schedule: EPSS puts exploitation within 30 days at 64.41%, so it is not left at Accept.")
-    assert "the exposure index alone (147.0) gives Accept, on scanner's reachability analysis found no call path" in text
+    assert "the exposure index alone (147.0) gives Accept, on scanner's reachability analysis identified no application execution path" in text
 
     accepted = Assessment(cve_id="CVE-2026-2", asset="portal", exposure=ExposureMeasure(
         index=90, verdict="Accept", threat=0.9, reachability=0.05, consequence=0.5, confidence="high",
@@ -757,3 +757,19 @@ def test_nothing_the_workbook_writes_uses_an_em_dash(tmp_path):
     for sheet in workbook.worksheets:
         for row in sheet.iter_rows(values_only=True):
             assert not any(isinstance(v, str) and "—" in v for v in row), sheet.title
+
+
+def test_user_interaction_and_no_execution_path_read_as_audit_language():
+    item = Assessment(
+        cve_id="CVE-2026-5003", asset="portal", internet_exposed=True,
+        exposure=ExposureMeasure(
+            index=40, verdict="Accept", threat=0.2, reachability=0.05, consequence=0.6, confidence="high",
+            reachability_basis=["Attack vector is network", "portal is reachable from the internet",
+                                "Exploitation is contingent on user interaction or social engineering",
+                                "Scanner's reachability analysis identified no application execution path to the "
+                                "vulnerable function"]))
+    lead = item.rationale().split(" Also:")[0].split(" Context:")[0]
+    assert lead == ("Accept: hard to reach in this environment, because scanner's reachability analysis identified no "
+                    "application execution path to the vulnerable function; exploitation is contingent on user "
+                    "interaction or social engineering.")
+    assert "tricked" not in item.rationale() and "call path" not in item.rationale()

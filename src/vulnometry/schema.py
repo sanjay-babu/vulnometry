@@ -359,9 +359,9 @@ class Assessment(Serialisable):
             ctx.append("public exploit material referenced")
         if self.code_reachability:
             ctx.append(
-                "call path to the vulnerable function"
+                "an application execution path reaches the vulnerable function"
                 if self.code_reachability == "reachable"
-                else "no call path to the vulnerable function"
+                else "no application execution path to the vulnerable function"
             )
         parts = ["Context: " + ", ".join(ctx) + "."]
         parts += [line[0].upper() + line[1:] + "." for line in e.reachability_basis if " not counted: " in line]
@@ -403,10 +403,10 @@ class Assessment(Serialisable):
 # vector, internet exposure, a call path) are never offered as the reason something scored low.
 _REDUCING = {
     "reachability": (
-        "found no call path", "does not run the affected component", "is not internet-reachable",
+        "no application execution path", "does not run the affected component", "is not internet-reachable",
         "Compensating controls in place", "Attack vector is local", "Attack vector is adjacent",
         "Attack vector is physical", "Requires privileged access", "High attack complexity",
-        "Requires some level", "Needs a user", "Internet exposure unknown",
+        "Requires some level", "contingent on user interaction", "Internet exposure unknown",
     ),
     "threat": ("EPSS puts exploitation",),
     "consequence": ("Denial of service only", "CVSS impact", "base score", "supporting", "Holds internal data",
@@ -436,7 +436,7 @@ def _reducing(factor: str, basis: list[str], limit: int = 2) -> list[str]:
     return found[:limit]
 
 
-_LOWER_FIRST = ("Scanner's", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ", "Denial",
+_LOWER_FIRST = ("Scanner's", "Scanner ", "Exploitation is", "High", "Requires", "Needs", "Attack", "Internet", "Compensating", "No ", "Denial",
                 "Public", "Holds", "In scope", "Production", "Development")
 
 

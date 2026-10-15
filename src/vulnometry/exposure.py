@@ -178,7 +178,7 @@ def compute_reachability(
             basis.append("Requires privileged access already")
         if _first_letter(severity.user_interaction) == "R":
             reach *= 0.75
-            basis.append("Needs a user to be tricked into acting")
+            basis.append("Exploitation is contingent on user interaction or social engineering")
 
     if asset.internet_exposed is True:
         basis.append(f"{asset.name} is reachable from the internet")
@@ -222,12 +222,12 @@ def compute_reachability(
             # Exploited in the wild is observed fact; a static call graph that
             # says otherwise is the weaker evidence. Recorded, not applied.
             basis.append(
-                "Scanner found no call path to the vulnerable function, "
+                "Scanner identified no application execution path to the vulnerable function, "
                 "not discounted because it is exploited in the wild"
             )
         else:
             reach *= CODE_UNREACHABLE_REACH
-            basis.append("Scanner's reachability analysis found no call path to the vulnerable function")
+            basis.append("Scanner's reachability analysis identified no application execution path to the vulnerable function")
 
     collapsed = "reachability" if reach < 0.05 else ""
     return _clamp(reach), basis, collapsed
