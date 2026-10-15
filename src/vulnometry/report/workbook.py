@@ -336,7 +336,7 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
         rec["suppress_until"] = until
         why = rec["reason"].split(" — ", 1)[-1].split(" Context:")[0].rstrip(".")
         rec["ignore_reason"] = (f"Risk accepted: vulnometry {item.exposure.model_version} Accept "
-                                f"(BEI {item.exposure.index:.0f}) on {assessed}: {why}. Re-review by {until}.")[:500]
+                                f"(BEI {item.exposure.index:.1f}) on {assessed}: {why}. Re-review by {until}.")[:500]
     kept_open = len(accepted) - len(rows)
     sheet = workbook.create_sheet("DevSecOps - suppress", 3)
     _title(sheet, "DevSecOps: accepted rows to suppress in the scanner",

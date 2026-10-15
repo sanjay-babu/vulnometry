@@ -563,7 +563,7 @@ def test_devsecops_gets_only_what_is_safe_to_suppress(tmp_path):
     assert [r["Export row"] for r in suppress] == [2]
     assert suppress[0]["Suppress until"] == "2027-04-14", "182 days after the assessment"
     assert suppress[0]["Ignore type"] == "temporary-ignore"
-    assert suppress[0]["Ignore reason"].startswith("Risk accepted: vulnometry bei-1.1 Accept (BEI 60) on 2026-10-14")
+    assert suppress[0]["Ignore reason"].startswith("Risk accepted: vulnometry bei-1.1 Accept (BEI 60.0) on 2026-10-14")
     assert "Re-review by 2027-04-14" in suppress[0]["Ignore reason"]
 
     accepted = {r["Export row"]: r["Suppress in scanner"]
@@ -645,7 +645,7 @@ def test_a_raised_verdict_says_why_and_a_high_epss_is_never_a_reason_for_low_ris
                       probability=ExploitProbability(probability=0.6441, resolved=True))
     text = item.rationale()
     assert text.startswith("Schedule: EPSS puts exploitation within 30 days at 64.41%, so it is not left at Accept.")
-    assert "the exposure index alone (147) gives Accept, on scanner's reachability analysis found no call path" in text
+    assert "the exposure index alone (147.0) gives Accept, on scanner's reachability analysis found no call path" in text
 
     accepted = Assessment(cve_id="CVE-2026-2", asset="portal", exposure=ExposureMeasure(
         index=90, verdict="Accept", threat=0.9, reachability=0.05, consequence=0.5, confidence="high",
@@ -687,3 +687,9 @@ def test_a_directive_names_the_upgrade_once():
     text = directive_for(ExposureMeasure(verdict="Schedule"), ConfirmedExploitation(), ["x 1.0"], asset,
                          scanner_fixability="No Fix Supported")
     assert "parent that pulls it in" in text
+
+
+def test_a_score_just_under_a_threshold_is_never_shown_rounded_up_to_it():
+    measure = ExposureMeasure(index=149.8, verdict="Accept", threat=0.1, reachability=0.3, consequence=0.9,
+                              confidence="high")
+    assert "BEI 149.8" in Assessment(cve_id="CVE-2026-1", exposure=measure).one_line()

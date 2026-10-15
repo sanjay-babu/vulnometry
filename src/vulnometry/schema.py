@@ -376,7 +376,7 @@ class Assessment(Serialisable):
     def _floored_rationale(self) -> str:
         """A verdict a guardrail raised: why it could not be accepted, then what the score said."""
         e = self.exposure
-        index_said = (f"the exposure index alone ({e.index:.0f}) gives {e.scored_verdict}"
+        index_said = (f"the exposure index alone ({e.index:.1f}) gives {e.scored_verdict}"
                       + (f", on {'; '.join(_sentence(r) for r in self._lowest_reasons())}" if self._lowest_reasons()
                          else ""))
         return (f"{e.verdict}: {e.floor_reason}, so it is not left at {e.scored_verdict}. "
@@ -390,7 +390,7 @@ class Assessment(Serialisable):
         return _reducing(name, basis)
 
     def one_line(self) -> str:
-        bits = [self.cve_id, f"BEI {self.exposure.index:.0f}", self.exposure.verdict]
+        bits = [self.cve_id, f"BEI {self.exposure.index:.1f}", self.exposure.verdict]
         if self.where():
             bits.append(f"on {self.where()}")
         if self.exploitation.confirmed:
