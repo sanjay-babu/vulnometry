@@ -145,7 +145,11 @@ async def assess_finding(
     artifacts.extend(adv_feed.citations_as_artifacts(weakness.citations))
 
     measure = measure_exposure(weakness, probability, exploitation, artifacts, asset, code_reachability)
-    measure = apply_floors(measure, exploitation, probability, asset, code_reachability, scanner_exploit_maturity)
+    severity = weakness.primary_severity()
+    critical = (scanner_band(scanner_severity) == "Critical" if scanner_band(scanner_severity) else
+                bool(severity and severity.base_score is not None and severity.base_score >= 9.0))
+    measure = apply_floors(measure, exploitation, probability, asset, code_reachability, scanner_exploit_maturity,
+                           critical)
     fixes = _fix_versions(bulletins, issue_id)
     policy = inventory.sla if inventory else None
     due_by = asset.due_date(measure.verdict, from_date=run_date(), policy=policy)

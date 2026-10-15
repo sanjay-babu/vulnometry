@@ -298,3 +298,16 @@ def test_guardrails_leave_a_well_founded_accept_alone():
                                ConfirmedExploitation(confirmed=True), [], gone)
     assert apply_floors(measure, ConfirmedExploitation(confirmed=True), ExploitProbability(probability=0.9),
                         gone).verdict == "Accept", "nothing to fix where the component is not deployed"
+
+
+def test_a_critical_on_an_internet_facing_asset_needs_call_path_evidence_to_be_accepted():
+    exposed = AssetProfile(name="portal", tier=3, internet_exposed=True, deployed=True)
+    measure, probability, apply_floors = _accepted(exposed)
+    raised = apply_floors(measure, ConfirmedExploitation(), probability, exposed, "", "", critical=True)
+    assert raised.verdict == "Schedule" and "not called" in raised.floor_reason
+    measure, probability, _ = _accepted(exposed)
+    kept = apply_floors(measure, ConfirmedExploitation(), probability, exposed, "unreachable", "", critical=True)
+    assert kept.verdict == "Accept", "no call path is the evidence that allows it"
+    internal = AssetProfile(name="batch", tier=3, internet_exposed=False, deployed=True)
+    measure, probability, _ = _accepted(internal)
+    assert apply_floors(measure, ConfirmedExploitation(), probability, internal, "", "", critical=True).verdict == "Accept"

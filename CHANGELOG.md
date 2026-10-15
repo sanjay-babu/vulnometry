@@ -10,6 +10,10 @@ Exposure model `bei-1.2`.
 
 ### Changed
 
+- Fixed versions no longer include git commit hashes from source-repository ranges, and an EPSS of
+  10% or more is never cited as a reason for a low score. Directives name the upgrade once and,
+  when the scanner offers no fix path, point at the parent dependency.
+
 - Denial of service against an internal asset: when the CVSS impact is to availability alone
   (C:N/I:N) and the asset is not internet-exposed, Consequence is halved. The attacker has to be
   inside the network already and the worst case is a recoverable outage, not a breach. The
@@ -21,6 +25,12 @@ Exposure model `bei-1.2`.
 
 ### Added
 
+- Acceptance guardrails. The index is unchanged, but the verdict is raised to a floor, and the
+  rationale states why and what the index alone gave: CISA KEV is at least Remediate; at least
+  Schedule for EPSS of 10% or more (the level at which an accepted risk is reopened), a scanner call
+  path on an internet-facing asset, a scanner-reported mature exploit on an internet-facing asset,
+  or a critical finding on an internet-facing asset without the scanner's evidence that the
+  vulnerable code is not called. Nothing is raised where the component is not deployed.
 - Reproducible runs. `VULNOMETRY_EVIDENCE_RECORD=path` writes every feed response a run used
   (NVD, EPSS, KEV, OSV, GitHub) to a SQLite evidence file with the run's timestamp;
   `VULNOMETRY_EVIDENCE_REPLAY=path` answers every request from that file, never touches the
