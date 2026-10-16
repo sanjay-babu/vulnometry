@@ -187,7 +187,7 @@ def _sample() -> list[Assessment]:
     ]
 
 
-def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
+def test_suppress_sheet_carries_rationale_evidence_and_signoff_columns(tmp_path):
     from openpyxl import load_workbook
 
     accepted = Assessment(
@@ -204,9 +204,12 @@ def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
         measured_at="2026-09-09T12:00:00+00:00",
     )
     path = build_workbook([accepted], tmp_path / "out.xlsx", None)
-    sheet = load_workbook(path)["Accepted"]
+    workbook = load_workbook(path)
+    assert not {"Accepted", "Manual review", "Action Plan"} & set(workbook.sheetnames), "merged or dropped"
+    sheet = workbook["DevSecOps - suppress"]
     header = [c.value for c in sheet[4]]
-    for col in ("Rationale", "Internet", "EPSS %", "EPSS date", "Reopen triggers", "Decision", "Model"):
+    for col in ("Rationale", "Internet", "EPSS %", "EPSS date", "Reopen triggers", "Model", "Suppress until",
+                "Ignore reason", "Decided by"):
         assert col in header, col
 
     row = {header[i]: sheet.cell(row=5, column=i + 1).value for i in range(len(header))}
@@ -216,7 +219,8 @@ def test_accepted_sheet_carries_rationale_and_signoff_columns(tmp_path):
     assert row["Model"] == MODEL_VERSION
     assert "exploitation unlikely in the next 30 days" in row["Rationale"]
     assert "EPSS 0.40% (as of 2026-09-08)" in row["Rationale"]
-    assert row["Decision"] == "Accept risk; suppress in scanner"
+    assert row["Suppress in scanner"] == "Yes"
+    assert row["Suppress until"] and row["Ignore reason"].startswith("Risk accepted:")
     assert "EPSS >= 0.10" in row["Reopen triggers"]
     assert "CISA KEV" in row["Reopen triggers"]
 
@@ -236,7 +240,7 @@ def test_rows_the_model_could_not_score_are_summarised(tmp_path):
     summary = {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0,
                "not_scored": not_scored}
     workbook = load_workbook(build_workbook(_sample(), tmp_path / "out.xlsx", summary))
-    assert "Not scored" not in workbook.sheetnames, "they live on Manual review"
+    assert "Not scored" not in workbook.sheetnames, "they live on Engineering - fix"
     method = " ".join(str(c.value) for row in workbook["Method"].iter_rows() for c in row if c.value)
     assert "2 row(s) not scored" in method
     assert json.loads(to_json(_sample(), summary))["summary"]["not_scored"]["count"] == 2
@@ -330,14 +334,13 @@ def test_workbook_has_the_expected_sheets_and_survives_a_round_trip(tmp_path):
     path = build_workbook(_sample(), tmp_path / "out.xlsx",
                           {"assessed": 2, "actionable": 1, "suppressed_by_context": 1, "unattributed": 0})
     workbook = load_workbook(path)
-    assert workbook.sheetnames == ["Findings", "Manual review", "Engineering - fix", "DevSecOps - suppress",
-                                   "DevSecOps - no fix yet", "Action Plan", "Accepted", "By Owner", "Method"]
+    assert workbook.sheetnames == ["Findings", "Engineering - fix", "DevSecOps - suppress",
+                                   "DevSecOps - no fix yet", "By Owner", "Method"]
     rows = _table(workbook["Findings"], ["CVE", "Verdict", "Judgment"])
     assert rows[0] == {"CVE": "CVE-2021-44228", "Verdict": "Contain", "Judgment": "Fix"}
     assert workbook["Findings"].auto_filter.ref
-    action = workbook["Action Plan"]
-    assert action.cell(row=5, column=3).value == "CVE-2021-44228"
-    assert action.cell(row=6, column=3).value is None
+    engineering = _table(workbook["Engineering - fix"], ["CVE", "Judgment"])
+    assert engineering[0] == {"CVE": "CVE-2021-44228", "Judgment": "Fix"}, "Fix rows lead engineering's list"
 
 
 def _snyk_like_rows():
@@ -409,18 +412,17 @@ def test_the_lists_are_filters_of_findings(tmp_path):
 
     items, summary = _snyk_like_rows()
     workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
-    review = sorted(r["Export row"] for r in _table(workbook["Manual review"], ["Export row"]))
-    engineering = sorted(r["Export row"] for r in _table(workbook["Engineering - fix"], ["Export row"]))
+    engineering_rows = _table(workbook["Engineering - fix"], ["Export row", "Judgment"])
+    engineering = sorted(r["Export row"] for r in engineering_rows)
+    review = sorted(r["Export row"] for r in engineering_rows if r["Judgment"] == "Not analysed")
     assert engineering == [2, 3, 4, 5, 7], "everything that is not an accepted risk, unreviewed rows included"
     to_fix = [r for r in engineering if r not in review]
-    accepted = sorted(r["Export row"] for r in _table(workbook["Accepted"], ["Export row"]))
+    accepted = sorted(r["Export row"] for r in _table(workbook["DevSecOps - suppress"], ["Export row"]))
     assert review == [5, 7]
     assert to_fix == [2, 3, 4]
-    assert accepted == [6], "a worst-case Accept on an unmatched project is never on Accepted"
+    assert accepted == [6], "a worst-case Accept on an unmatched project is never suppressed"
     assert sorted(review + to_fix + accepted) == [2, 3, 4, 5, 6, 7]
-    assert "1 more scored Accept but are left off (Not analysed: 1 with no inventory match, 0 with too little" \
-        in workbook["Accepted"].cell(row=2, column=1).value
-    assert _counts(workbook["Manual review"])["Total"] == 2
+    assert "1 more scored Accept but are Not analysed" in workbook["DevSecOps - suppress"].cell(row=2, column=1).value
 
 
 def test_the_same_issue_link_twice_is_flagged_not_merged(tmp_path):
@@ -479,11 +481,11 @@ def test_accept_rationale_cites_what_lowered_the_score():
             index=60, verdict="Accept", threat=0.3, reachability=0.1, consequence=0.8, confidence="high",
             threat_basis=["EPSS puts exploitation within 30 days at 0.40%, ahead of 30% of all CVEs"],
             reachability_basis=["Attack vector is network", "billing is not internet-reachable",
-                                "Scanner's reachability analysis found no call path to the vulnerable function"],
+                                "Scanner's reachability analysis identified no application execution path to the vulnerable function"],
             consequence_basis=["CVSS impact C:HIGH I:HIGH A:HIGH"]))
     text = item.rationale()
-    assert text.startswith("Accept: hard to reach in this environment, because scanner's reachability analysis found no "
-                           "call path to the vulnerable function; billing is not internet-reachable.")
+    assert text.startswith("Accept: hard to reach in this environment, because scanner's reachability analysis identified "
+                           "no application execution path to the vulnerable function; billing is not internet-reachable.")
     assert "Attack vector is network" not in text.split("Context:")[0], "a reason to reach is not a reason not to"
     assert "Also: EPSS puts exploitation within 30 days at 0.40%" in text
 
@@ -506,7 +508,7 @@ def test_an_accept_without_enough_data_is_not_analysed(tmp_path):
     assert rows[2]["Judgment"] == "Not analysed" and rows[2]["Not analysed because"] == "Insufficient data"
     assert "not enough data to accept this risk (No EPSS score retrieved; confidence medium)" in rows[2]["Rationale"]
     assert rows[3]["Judgment"] == "Accept"
-    assert [r["Export row"] for r in _table(workbook["Accepted"], ["Export row"])] == [3]
+    assert [r["Export row"] for r in _table(workbook["DevSecOps - suppress"], ["Export row"])] == [3]
 
 
 def test_licence_rows_say_so_and_issue_type_is_shown(tmp_path):
@@ -560,14 +562,16 @@ def test_devsecops_gets_only_what_is_safe_to_suppress(tmp_path):
 
     suppress = _table(workbook["DevSecOps - suppress"], ["Export row", "Issue ID", "Suppress until", "Ignore type",
                                                          "Ignore reason"])
-    assert [r["Export row"] for r in suppress] == [2]
+    assert [r["Export row"] for r in suppress] == [2, 3, 4, 5], "every accepted row, kept-open ones included"
+    assert [r["Suppress until"] for r in suppress[1:]] == [None] * 3, "kept-open rows get no expiry"
+    assert [r["Ignore type"] for r in suppress[1:]] == [None] * 3
     assert suppress[0]["Suppress until"] == "2027-04-14", "182 days after the assessment"
     assert suppress[0]["Ignore type"] == "temporary-ignore"
     assert suppress[0]["Ignore reason"].startswith("Risk accepted: vulnometry bei-1.1 Accept (BEI 60.0) on 2026-10-14")
     assert "Re-review by 2027-04-14" in suppress[0]["Ignore reason"]
 
     accepted = {r["Export row"]: r["Suppress in scanner"]
-                for r in _table(workbook["Accepted"], ["Export row", "Suppress in scanner"])}
+                for r in _table(workbook["DevSecOps - suppress"], ["Export row", "Suppress in scanner"])}
     assert accepted[2] == "Yes"
     assert "call path" in accepted[3] and "mature exploit" in accepted[4] and "CISA KEV" in accepted[5]
 
@@ -638,14 +642,14 @@ def test_a_raised_verdict_says_why_and_a_high_epss_is_never_a_reason_for_low_ris
 
     measure = ExposureMeasure(index=147, verdict="Schedule", scored_verdict="Accept", threat=0.8, reachability=0.1,
                               consequence=0.9, floor_reason="EPSS puts exploitation within 30 days at 64.41%",
-                              reachability_basis=["Scanner's reachability analysis found no call path to the "
+                              reachability_basis=["Scanner's reachability analysis identified no application execution path to the "
                                                   "vulnerable function"],
                               threat_basis=["EPSS puts exploitation within 30 days at 64.41%"], confidence="high")
     item = Assessment(cve_id="CVE-2026-1", asset="portal", exposure=measure,
                       probability=ExploitProbability(probability=0.6441, resolved=True))
     text = item.rationale()
     assert text.startswith("Schedule: EPSS puts exploitation within 30 days at 64.41%, so it is not left at Accept.")
-    assert "the exposure index alone (147.0) gives Accept, on scanner's reachability analysis found no call path" in text
+    assert "the exposure index alone (147.0) gives Accept, on scanner's reachability analysis identified no application execution path" in text
 
     accepted = Assessment(cve_id="CVE-2026-2", asset="portal", exposure=ExposureMeasure(
         index=90, verdict="Accept", threat=0.9, reachability=0.05, consequence=0.5, confidence="high",
@@ -737,7 +741,8 @@ def test_suppress_all_hides_every_accept_and_records_the_scanner_flag(tmp_path):
                             issue_url=url + "#issue-SNYK-JS-Y-1", issue_id="SNYK-JS-Y-1", code_reachability="reachable",
                             exposure=ExposureMeasure(index=90, verdict="Accept", confidence="high")))
     safe = load_workbook(build_workbook(items, tmp_path / "safe.xlsx", summary))
-    assert 8 not in {r["Export row"] for r in _table(safe["DevSecOps - suppress"], ["Export row"])}
+    kept = {r["Export row"]: r for r in _table(safe["DevSecOps - suppress"], ["Export row", "Suppress until"])}
+    assert kept[8]["Suppress until"] is None, "kept open under the safe policy: no expiry, so never ignored"
     summary["policy"] = {"suppress_accepted": "all"}
     every = load_workbook(build_workbook(items, tmp_path / "all.xlsx", summary))
     rows = {r["Export row"]: r for r in _table(every["DevSecOps - suppress"], ["Export row", "Ignore reason"])}
@@ -752,3 +757,19 @@ def test_nothing_the_workbook_writes_uses_an_em_dash(tmp_path):
     for sheet in workbook.worksheets:
         for row in sheet.iter_rows(values_only=True):
             assert not any(isinstance(v, str) and "—" in v for v in row), sheet.title
+
+
+def test_user_interaction_and_no_execution_path_read_as_audit_language():
+    item = Assessment(
+        cve_id="CVE-2026-5003", asset="portal", internet_exposed=True,
+        exposure=ExposureMeasure(
+            index=40, verdict="Accept", threat=0.2, reachability=0.05, consequence=0.6, confidence="high",
+            reachability_basis=["Attack vector is network", "portal is reachable from the internet",
+                                "Exploitation is contingent on user interaction or social engineering",
+                                "Scanner's reachability analysis identified no application execution path to the "
+                                "vulnerable function"]))
+    lead = item.rationale().split(" Also:")[0].split(" Context:")[0]
+    assert lead == ("Accept: hard to reach in this environment, because scanner's reachability analysis identified no "
+                    "application execution path to the vulnerable function; exploitation is contingent on user "
+                    "interaction or social engineering.")
+    assert "tricked" not in item.rationale() and "call path" not in item.rationale()

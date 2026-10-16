@@ -293,35 +293,36 @@ Reads `.xlsx`, `.xls`, `.csv` and `.tsv`, plus native JSON from Trivy, Grype, Sn
 Dependabot and SARIF. `vulnometry sweep` handles lockfiles and SBOMs: requirements.txt,
 poetry.lock, package-lock.json, go.mod, Gemfile.lock, Cargo.lock, pom.xml, CycloneDX and SPDX.
 
-The workbook it writes has these sheets: Findings (every finding, colour-coded, filterable,
+The workbook it writes has six sheets: Findings (every finding, colour-coded, filterable,
 frozen header, one row per export row with its judgment and a plain-language Rationale column),
-Manual review (rows judged Not analysed), Engineering - fix (everything not accepted), DevSecOps -
-suppress (accepted rows safe to suppress, with expiry), Action Plan (Contain and Remediate, sorted by due date), Accepted
-(analysed findings below the action threshold, with the rationale, the EPSS score and its date,
-internet exposure, evidence gaps, model version and timestamp, plus blank columns for who
-accepted it, the review-by date and what should reopen it), By Owner (workload per team), and
-Method (how the numbers were produced).
+Engineering - fix (everything not accepted: Fix and Schedule by due date, then the rows judged Not
+analysed), DevSecOps - suppress (every accepted row: the ignore to create, with its expiry and
+reason, then the evidence behind it, namely the rationale, the EPSS score and its date, internet
+exposure, evidence gaps, model version and timestamp and what should reopen it, plus one set of
+sign-off columns), DevSecOps - no fix yet (Schedule rows with nothing to upgrade to), By Owner
+(workload per team), and Method (how the numbers were produced).
 
-The scanner's own severity is carried through: a Scanner severity column on Findings, Action
-Plan and Accepted, and a `scanner_severity` column in `--format csv`. That puts the rating the
+The scanner's own severity is carried through: a Scanner severity column on every sheet, and a
+`scanner_severity` column in `--format csv`. That puts the rating the
 reader has already seen in Snyk or Nessus next to the verdict. Rows with no CVE identifier, such
 as licence issues and scanner-only advisories, can't be scored. They are not dropped silently:
-the Manual review sheet and `summary.not_scored` in JSON list each one with its scanner severity,
+the Engineering - fix sheet and `summary.not_scored` in JSON list each one with its scanner severity,
 so the report still accounts for every row in the export.
 
 Two sheets are hand-offs. *Engineering - fix* lists everything that is not an accepted risk:
 what to fix, by due date, with the version to upgrade to, then what could not be judged.
-*DevSecOps - suppress* lists the accepted rows that are safe to hide in the scanner, each with
-an ignore reason and an expiry (`sla.review_days`); accepted rows the scanner's own evidence
-argues against hiding (call path found, mature exploit, CISA KEV) stay open.
+*DevSecOps - suppress* lists every accepted row, and is also the audit record of the acceptance.
+Rows to hide in the scanner carry an ignore reason and an expiry (`sla.review_days`); under the
+default `suppress_accepted: safe`, accepted rows the scanner's own evidence argues against hiding
+(call path found, mature exploit, CISA KEV) are listed with no expiry and stay open.
 
 Findings has one row per row of the export: nothing is merged, so the row count matches the
 file you were given. Each row is judged Fix, Schedule, Accept or Not analysed (no inventory
-match, or no CVE) and keeps the scanner's severity, issue ID, project, target and links. Manual
-review, Engineering - fix, DevSecOps - suppress and Accepted are filters of it.
+match, or no CVE) and keeps the scanner's severity, issue ID, project, target and links.
+Engineering - fix, DevSecOps - suppress and DevSecOps - no fix yet are filters of it.
 
 When a finding matches no asset in your inventory the workbook says `Not analysed` in place of a
-verdict and keeps it off the Accepted sheet; the rationale gives the worst-case result.
+verdict and keeps it off DevSecOps - suppress; the rationale gives the worst-case result.
 
 When a finding matches no asset in your inventory it is still scored (pessimistically) and
 still actionable: every report keeps the name the scanner gave it — the Project and Target columns in the
