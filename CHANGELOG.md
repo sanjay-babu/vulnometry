@@ -8,6 +8,12 @@ that any change to the exposure model bumps `MODEL_VERSION` independently.
 
 Exposure model `bei-1.3`.
 
+### Added
+
+- `policy.suppress_accepted: except-mature`: suppress every accepted row, including those where
+  the scanner found a call path (the ignore reason records it), but keep rows with a mature exploit
+  open in the scanner.
+
 ### Changed
 
 - A WAF (or other network control) is credited only for weaknesses it can filter: injection,

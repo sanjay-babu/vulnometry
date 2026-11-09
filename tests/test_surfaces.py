@@ -749,6 +749,33 @@ def test_suppress_all_hides_every_accept_and_records_the_scanner_flag(tmp_path):
     assert 8 in rows and "although the scanner found a call path" in rows[8]["Ignore reason"]
 
 
+def test_except_mature_suppresses_call_path_rows_but_keeps_mature_exploits_open(tmp_path):
+    from openpyxl import load_workbook
+
+    items, summary = _snyk_like_rows()
+    url = "https://scanner.example/org/o/project/p3"
+    items += [
+        Assessment(cve_id="CVE-2026-7001", asset="checkout-api", scanner_severity="High", source_row=8,
+                   issue_url=url + "#issue-SNYK-JS-Y-1", issue_id="SNYK-JS-Y-1", code_reachability="reachable",
+                   exposure=ExposureMeasure(index=90, verdict="Accept", confidence="high")),
+        Assessment(cve_id="CVE-2026-7002", asset="checkout-api", scanner_severity="High", source_row=9,
+                   issue_url=url + "#issue-SNYK-JS-Y-2", issue_id="SNYK-JS-Y-2", scanner_exploit_maturity="Mature",
+                   exposure=ExposureMeasure(index=90, verdict="Accept", confidence="high")),
+        Assessment(cve_id="CVE-2026-7003", asset="checkout-api", scanner_severity="High", source_row=10,
+                   issue_url=url + "#issue-SNYK-JS-Y-3", issue_id="SNYK-JS-Y-3", code_reachability="reachable",
+                   scanner_exploit_maturity="Mature",
+                   exposure=ExposureMeasure(index=90, verdict="Accept", confidence="high")),
+    ]
+    summary["policy"] = {"suppress_accepted": "except-mature"}
+    workbook = load_workbook(build_workbook(items, tmp_path / "out.xlsx", summary))
+    rows = {r["Export row"]: r for r in _table(workbook["DevSecOps - suppress"],
+                                               ["Export row", "Suppress until", "Ignore reason"])}
+    assert rows[8]["Suppress until"] and "except-mature policy although the scanner found a call path" in \
+        rows[8]["Ignore reason"]
+    assert rows[9]["Suppress until"] is None, "a mature exploit stays open"
+    assert rows[10]["Suppress until"] is None, "a mature exploit stays open even when a call path is also found"
+
+
 def test_nothing_the_workbook_writes_uses_an_em_dash(tmp_path):
     from openpyxl import load_workbook
 

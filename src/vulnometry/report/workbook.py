@@ -332,7 +332,8 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
         rec["suppress_until"] = until
         why = rec["reason"].split(", because ", 1)[-1].split(" Context:")[0].rstrip(".")
         flag = scanner_flag(item)
-        note = (f" Suppressed under the suppress-all policy although {flag}; re-assessed at the next review."
+        policy = "suppress-all" if rec.get("suppress_policy") == "all" else "except-mature"
+        note = (f" Suppressed under the {policy} policy although {flag}; re-assessed at the next review."
                 if flag else "")
         rec["ignore_reason"] = (f"Risk accepted: vulnometry {item.exposure.model_version} Accept "
                                 f"(BEI {item.exposure.index:.1f}) on {assessed}: {why}. Re-review by {until}."
@@ -340,6 +341,7 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
     suppressed = sum(1 for r in accepted if suppression(r)[0])
     kept_open = len(accepted) - suppressed
     flagged = sum(1 for r in accepted if suppression(r)[0] and scanner_flag(r["item"]))
+    policy_all = any(r.get("suppress_policy") == "all" for r in accepted)
     held = [r for r in records if r["item"] is not None and not r["analysed"]
             and r["item"].exposure.verdict == "Accept"]
     sheet = workbook.create_sheet("DevSecOps - suppress", 2)
@@ -348,8 +350,10 @@ def _devsecops_sheet(workbook: Workbook, records: list[dict], review_days: int) 
            f"shown ({review_days} days, the next review). "
            + (f"{kept_open} stay open in the scanner because its own evidence argues against hiding them (call "
               "path found, mature exploit, or CISA KEV): no expiry, see 'Suppress in scanner'. " if kept_open else "")
-           + (f"{flagged} of the rows to suppress carry a scanner flag (call path or mature exploit); the policy "
-              "suppresses every accepted row, and the ignore reason records the flag. " if flagged else "")
+           + (f"{flagged} of the rows to suppress carry a scanner flag (call path"
+              + (" or mature exploit); the policy suppresses every accepted row" if policy_all else
+                 "); the policy suppresses every accepted row except those with a mature exploit")
+              + ", and the ignore reason records the flag. " if flagged else "")
            + (f"{len(held)} more scored Accept but are Not analysed (no inventory match or too little data), so "
               "they are on 'Engineering - fix', never here. " if held else "")
            + "This is the audit record: fill 'Decided by' and 'Decision date' when signed off.")
@@ -462,6 +466,10 @@ def _policy_text(summary: dict | None) -> str:
     if policy.suppress_accepted == "all":
         parts.append("Every accepted row is suppressed in the scanner until the next review, including rows the "
                      "scanner flags (call path, mature exploit); the ignore reason records the flag.")
+    elif policy.suppress_accepted == "except-mature":
+        parts.append("Every accepted row is suppressed in the scanner until the next review, including rows where "
+                     "the scanner found a call path (the ignore reason records it), except rows with a mature "
+                     "exploit, which stay open.")
     return " ".join(parts) or ("None set: every row is in scope and every severity is a priority. Set "
                                "'policy.issue_types' and 'policy.priority_severities' in the inventory to apply one.")
 

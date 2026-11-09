@@ -564,7 +564,7 @@ def _severity_list(names: list[str]) -> str:
 
 def _apply_policy(rec: dict, policy) -> None:
     """The organisation's triage rules, applied after the exposure judgment and stated in the row."""
-    rec["suppress_all"] = policy.suppress_accepted == "all"
+    rec["suppress_policy"] = policy.suppress_accepted
     if not policy.in_scope(rec.get("issue_type", "")):
         kind = (rec.get("issue_type") or "").strip().lower() or "non-vulnerability"
         rec.update(
@@ -609,21 +609,37 @@ def suppression(rec: dict) -> tuple[bool, str]:
     item = rec.get("item")
     if rec.get("judgment") != "Accept" or item is None:
         return False, "not accepted"
-    hold = scanner_flag(item)
-    if hold and not rec.get("suppress_all"):
-        return False, f"keep open: {hold}"
+    flags = scanner_flags(item)
+    policy = rec.get("suppress_policy", "safe")
+    if policy == "except-mature":
+        flags = [f for f in flags if f in (KEV_FLAG, MATURE_FLAG)]
+    elif policy == "all":
+        flags = []
+    if flags:
+        return False, f"keep open: {flags[0]}"
     return True, "suppress"
 
 
-def scanner_flag(item: Assessment) -> str:
-    """Evidence that argues against hiding an accepted row in the scanner, or ""."""
+KEV_FLAG = "exploited in the wild (CISA KEV)"
+REACHABLE_FLAG = "the scanner found a call path to the vulnerable function"
+MATURE_FLAG = "the scanner reports a mature exploit"
+
+
+def scanner_flags(item: Assessment) -> list[str]:
+    """Evidence that argues against hiding an accepted row in the scanner, strongest first."""
+    flags = []
     if item.exploitation.confirmed:
-        return "exploited in the wild (CISA KEV)"
+        flags.append(KEV_FLAG)
     if item.code_reachability == "reachable":
-        return "the scanner found a call path to the vulnerable function"
+        flags.append(REACHABLE_FLAG)
     if (item.scanner_exploit_maturity or "").strip().lower() == "mature":
-        return "the scanner reports a mature exploit"
-    return ""
+        flags.append(MATURE_FLAG)
+    return flags
+
+
+def scanner_flag(item: Assessment) -> str:
+    """The strongest evidence that argues against hiding an accepted row in the scanner, or ""."""
+    return next(iter(scanner_flags(item)), "")
 
 
 def _count_verdicts(items) -> dict:
