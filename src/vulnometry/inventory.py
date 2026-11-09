@@ -79,6 +79,9 @@ class SlaPolicy:
 SEVERITY_NAMES = ("critical", "high", "medium", "low")
 
 
+SUPPRESS_POLICIES = ("safe", "all", "except-mature")
+
+
 @dataclass
 class TriagePolicy:
     """Which scanner rows the organisation acts on, set in the inventory::
@@ -86,7 +89,8 @@ class TriagePolicy:
         policy:
           issue_types: [vulnerability]                   # other types (licence, ...) are Out of scope
           priority_severities: [critical, high, medium]  # other scanner severities are not prioritised
-          suppress_accepted: safe                         # or 'all': suppress every Accept in the scanner
+          suppress_accepted: safe                         # 'all': suppress every Accept in the scanner;
+                                                          # 'except-mature': all but mature-exploit rows
 
     Both are empty by default: every row is in scope and every severity is a priority. A row
     outside the priority severities is still judged on exposure like any other; it is only
@@ -97,7 +101,8 @@ class TriagePolicy:
     issue_types: list[str] = field(default_factory=list)
     priority_severities: list[str] = field(default_factory=list)
     # 'safe' keeps an accepted row open in the scanner when the scanner's own evidence argues against
-    # hiding it (call path, mature exploit); 'all' suppresses every accepted row and notes that evidence.
+    # hiding it (call path, mature exploit); 'all' suppresses every accepted row and notes that evidence;
+    # 'except-mature' is 'all' except that a row with a mature exploit stays open.
     suppress_accepted: str = "safe"
 
     @classmethod
@@ -119,8 +124,8 @@ class TriagePolicy:
             raise ValueError(f"policy.priority_severities: unknown severity {unknown[0]!r} "
                              f"({', '.join(SEVERITY_NAMES)})")
         suppress = str(raw.get("suppress_accepted") or "safe").strip().lower()
-        if suppress not in ("safe", "all"):
-            raise ValueError(f"policy.suppress_accepted: {suppress!r} (safe or all)")
+        if suppress not in SUPPRESS_POLICIES:
+            raise ValueError(f"policy.suppress_accepted: {suppress!r} ({', '.join(SUPPRESS_POLICIES)})")
         return cls(issue_types=names("issue_types"), priority_severities=severities, suppress_accepted=suppress)
 
     def in_scope(self, issue_type: str) -> bool:

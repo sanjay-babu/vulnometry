@@ -153,7 +153,8 @@ policy:
   issue_types: [vulnerability]                   # licence and other issue types become "Out of scope"
   priority_severities: [critical, high, medium]  # other scanner severities are still judged, but marked
                                                  # "Not prioritised" and listed last for engineering
-  suppress_accepted: safe                        # 'all' suppresses every accepted row in the scanner
+  suppress_accepted: safe                        # 'all' suppresses every accepted row in the scanner;
+                                                 # 'except-mature' all but those with a mature exploit
 ```
 
 A row outside the priority severities is still scored and judged Fix, Schedule, Accept or Not
@@ -315,6 +316,8 @@ what to fix, by due date, with the version to upgrade to, then what could not be
 Rows to hide in the scanner carry an ignore reason and an expiry (`sla.review_days`); under the
 default `suppress_accepted: safe`, accepted rows the scanner's own evidence argues against hiding
 (call path found, mature exploit, CISA KEV) are listed with no expiry and stay open.
+`all` suppresses every accepted row, and the ignore reason records any such flag;
+`except-mature` does the same but keeps rows with a mature exploit open.
 
 Findings has one row per row of the export: nothing is merged, so the row count matches the
 file you were given. Each row is judged Fix, Schedule, Accept or Not analysed (no inventory

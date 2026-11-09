@@ -32,6 +32,10 @@ Exposure model `bei-1.3`.
 
 ### Added
 
+- `policy.suppress_accepted: except-mature`: suppress every accepted row, including those where
+  the scanner found a call path (the ignore reason records it), but keep rows with a mature exploit
+  open in the scanner.
+
 - `policy.suppress_accepted: all` suppresses every accepted row in the scanner, including rows the
   scanner flags (call path, mature exploit); the ignore reason records the flag. The default, `safe`,
   keeps flagged rows open.
